@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">连点助手</string>
+    <string name="accessibility_label">连点助手手势服务</string>
+    <string name="accessibility_desc">用于执行录制的点击与滑动手势，仅在你主动播放脚本时生效。</string>
+
+    <string name="channel_capture_name">屏幕截图</string>
+    <string name="channel_overlay_name">悬浮控制面板</string>
+
+    <string name="notif_capture_title">屏幕截图已就绪</string>
+    <string name="notif_capture_text">截图服务正在运行，可被脚本调用。</string>
+    <string name="notif_overlay_title">悬浮面板运行中</string>
+    <string name="notif_overlay_text">点击通知返回主界面。</string>
+</resources>
