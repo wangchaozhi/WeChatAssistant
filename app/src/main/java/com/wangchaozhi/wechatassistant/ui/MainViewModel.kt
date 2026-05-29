@@ -57,6 +57,10 @@ class MainViewModel(
         get() = settings.defaultPrompt
         set(value) { settings.defaultPrompt = value }
 
+    var qwenModel: String
+        get() = settings.qwenModel
+        set(value) { settings.qwenModel = value }
+
     val shizukuState: StateFlow<ShizukuManager.Status> = ShizukuManager.state
 
     fun requestShizukuPermission() {

@@ -38,7 +38,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_QWEN_API = "qwen_api_key"
         private const val KEY_DEFAULT_PROMPT = "default_prompt"
         private const val KEY_MODEL = "qwen_model"
-        const val DEFAULT_MODEL = "qwen-vl-max-latest"
+        const val DEFAULT_MODEL = "qwen3.5-omni-flash"
         const val DEFAULT_PROMPT = "请识别截图中的内容并简要回答。"
     }
 }

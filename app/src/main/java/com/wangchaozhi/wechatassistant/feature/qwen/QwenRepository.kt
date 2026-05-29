@@ -33,7 +33,7 @@ class QwenRepository(
     suspend fun ask(
         bitmap: Bitmap,
         prompt: String,
-        model: String = "qwen-vl-max-latest",
+        model: String = "qwen3.5-omni-flash",
         maxSide: Int = 1280,
         quality: Int = 80,
     ): Result<String> = withContext(Dispatchers.IO) {

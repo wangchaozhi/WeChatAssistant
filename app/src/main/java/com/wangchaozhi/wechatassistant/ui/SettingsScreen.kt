@@ -25,6 +25,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,6 +56,7 @@ import androidx.compose.ui.unit.dp
 fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var apiKey by remember { mutableStateOf(viewModel.apiKey) }
     var prompt by remember { mutableStateOf(viewModel.defaultPrompt) }
+    var model by remember { mutableStateOf(viewModel.qwenModel) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -82,6 +85,8 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onApiKey = { apiKey = it; viewModel.apiKey = it },
                     prompt = prompt,
                     onPrompt = { prompt = it; viewModel.defaultPrompt = it },
+                    model = model,
+                    onModel = { model = it; viewModel.qwenModel = it },
                 )
             }
             item { ShizukuCard(viewModel) }
@@ -95,6 +100,8 @@ private fun QwenCard(
     onApiKey: (String) -> Unit,
     prompt: String,
     onPrompt: (String) -> Unit,
+    model: String,
+    onModel: (String) -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -122,6 +129,7 @@ private fun QwenCard(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
+            ModelPicker(model = model, onModel = onModel)
             OutlinedTextField(
                 value = prompt,
                 onValueChange = onPrompt,
@@ -130,6 +138,64 @@ private fun QwenCard(
             )
         }
     }
+}
+
+@Composable
+private fun ModelPicker(model: String, onModel: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("多模态模型", style = MaterialTheme.typography.labelMedium)
+                Text(model, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            QWEN_OMNI_MODELS.forEach { item ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(item)
+                            Text(
+                                modelHint(item),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    onClick = {
+                        onModel(item)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+private val QWEN_OMNI_MODELS = listOf(
+    "qwen3.5-omni-flash",
+    "qwen3.5-omni-flash-2026-03-15",
+    "qwen3.5-omni-plus",
+    "qwen3.5-omni-plus-2026-03-15",
+    "qwen3.5-omni-flash-realtime",
+    "qwen3.5-omni-flash-realtime-2026-03-15",
+    "qwen3.5-omni-plus-realtime",
+    "qwen3.5-omni-plus-realtime-2026-03-15",
+)
+
+private fun modelHint(model: String): String = when {
+    "realtime" in model -> "实时交互模型，截图问答通常不需要"
+    "plus" in model -> "更强理解，适合复杂截图"
+    else -> "默认推荐，速度和成本更均衡"
 }
 
 @Composable
