@@ -19,35 +19,55 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.wangchaozhi.wechatassistant.App
@@ -55,6 +75,9 @@ import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.service.CaptureForegroundService
 import com.wangchaozhi.wechatassistant.service.OverlayService
 import com.wangchaozhi.wechatassistant.ui.theme.WcaTheme
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
@@ -186,12 +209,30 @@ private fun MainScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("连点助手") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                ),
+                title = {
+                    Column {
+                        Text("连点助手", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Shizuku 录制 · 无障碍回放",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
                 actions = {
-                    TextButton(onClick = onOpenHistory) { Text("AI 历史") }
-                    TextButton(onClick = onOpenSettings) { Text("设置") }
+                    IconButton(onClick = onOpenHistory) {
+                        Icon(Icons.Filled.History, contentDescription = "AI 历史")
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "设置")
+                    }
                 },
             )
         }
@@ -203,6 +244,19 @@ private fun MainScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item {
+                HeroStatusCard(
+                    scripts = scripts,
+                    accessibilityReady = accessibilityReady,
+                    overlayReady = overlayReady,
+                    captureReady = captureReady,
+                    playerState = playerState,
+                    onStartOverlay = onStartOverlay,
+                    onStopOverlay = onStopOverlay,
+                    onStartCapture = onStartCapture,
+                    onStopCapture = onStopCapture,
+                )
+            }
             item {
                 PermissionsCard(
                     notifGranted = notifGranted,
@@ -223,7 +277,10 @@ private fun MainScreen(
                 PlayerStatusCard(playerState, lastAnswer, onStop = viewModel::stop)
             }
             item {
-                Text("脚本列表", style = MaterialTheme.typography.titleMedium)
+                SectionHeader(
+                    title = "脚本",
+                    subtitle = if (scripts.isEmpty()) "录制完成后会自动保存到这里" else "${scripts.size} 个可用脚本",
+                )
             }
             items(scripts, key = { it.id }) { s ->
                 ScriptItem(
@@ -235,15 +292,85 @@ private fun MainScreen(
             }
             if (scripts.isEmpty()) {
                 item {
-                    Text(
-                        "还没有脚本。请先在悬浮面板点击「录制」，在屏幕上点选要重复的位置，完成后会自动保存。",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    EmptyScriptsCard()
                 }
             }
         }
     }
 }
+
+@Composable
+private fun HeroStatusCard(
+    scripts: List<Script>,
+    accessibilityReady: Boolean,
+    overlayReady: Boolean,
+    captureReady: Boolean,
+    playerState: com.wangchaozhi.wechatassistant.service.ServiceBus.PlayerState,
+    onStartOverlay: () -> Unit,
+    onStopOverlay: () -> Unit,
+    onStartCapture: () -> Unit,
+    onStopCapture: () -> Unit,
+) {
+    val playing = playerState is com.wangchaozhi.wechatassistant.service.ServiceBus.PlayerState.Playing
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+        ),
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.TouchApp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(34.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (playing) "正在执行脚本" else "准备录制与回放",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "${scripts.size} 个脚本 · ${readyCount(accessibilityReady, overlayReady, captureReady)}/3 项服务就绪",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = if (overlayReady) onStopOverlay else onStartOverlay,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(
+                        if (overlayReady) Icons.Filled.Stop else Icons.Filled.TouchApp,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (overlayReady) "关闭面板" else "启动面板")
+                }
+                OutlinedButton(
+                    onClick = if (captureReady) onStopCapture else onStartCapture,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (captureReady) "停止截图" else "截图服务")
+                }
+            }
+        }
+    }
+}
+
+private fun readyCount(vararg values: Boolean): Int = values.count { it }
 
 @Composable
 private fun PermissionsCard(
@@ -260,10 +387,15 @@ private fun PermissionsCard(
     onStartOverlay: () -> Unit,
     onStopOverlay: () -> Unit,
 ) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Text("权限 & 服务", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+        ),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            SectionHeader(title = "权限与服务", subtitle = "录制、回放、AI 截图的运行条件")
 
             PermRow(
                 title = "通知权限",
@@ -306,16 +438,44 @@ private fun PermRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        StatusDot(ok = action == null || action.first == "停止")
+        Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall)
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         if (action != null) {
-            OutlinedButton(onClick = action.second) { Text(action.first) }
+            OutlinedButton(
+                onClick = action.second,
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.defaultMinSize(minWidth = 78.dp),
+            ) { Text(action.first) }
         }
+    }
+}
+
+@Composable
+private fun StatusDot(ok: Boolean) {
+    val color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
+    Box(
+        modifier = Modifier
+            .size(22.dp)
+            .clip(CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (ok) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.size(20.dp),
+        )
     }
 }
 
@@ -327,23 +487,48 @@ private fun PlayerStatusCard(
 ) {
     val playing = state is
         com.wangchaozhi.wechatassistant.service.ServiceBus.PlayerState.Playing
-    Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors()) {
-        Column(Modifier.padding(16.dp)) {
-            Text("运行状态", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(6.dp))
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (playing) {
+                MaterialTheme.colorScheme.secondaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            },
+        ),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SectionHeader(title = "运行状态", subtitle = if (playing) "脚本正在回放" else "当前空闲")
             if (playing) {
                 val p = state as
                     com.wangchaozhi.wechatassistant.service.ServiceBus.PlayerState.Playing
-                Text("正在播放：${p.script.name}  ${p.stepIndex + 1}/${p.totalSteps}")
-                Spacer(Modifier.height(6.dp))
-                Button(onClick = onStop) { Text("停止") }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(p.script.name, style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "第 ${p.stepIndex + 1} / ${p.totalSteps} 步",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Button(onClick = onStop, shape = RoundedCornerShape(8.dp)) {
+                        Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("停止")
+                    }
+                }
             } else {
-                Text("空闲")
+                Text("悬浮面板启动后，可在任意应用中录制 Shizuku 手势并回放。")
             }
             if (!lastAnswer.isNullOrBlank()) {
-                Spacer(Modifier.height(10.dp))
-                Text("最近 AI 回答（已写入粘贴板）", style = MaterialTheme.typography.labelMedium)
-                Box(Modifier.padding(top = 4.dp)) { Text(lastAnswer) }
+                HorizontalDivider()
+                Text("最近 AI 回答", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    lastAnswer,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
@@ -359,24 +544,88 @@ private fun ScriptItem(
     Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onEdit,
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Filled.TouchApp, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            }
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(script.name, style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "循环 ${script.loopCount} 次  速度 ${script.speed}x",
+                    script.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "循环 ${script.loopCount} 次 · 速度 ${script.speed}x · ${formatScriptDate(script.createdAt)}",
                     style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            Button(onClick = onPlay) { Text("播放") }
-            Spacer(Modifier.height(0.dp))
-            TextButton(onClick = onDelete) { Text("删除") }
+            IconButton(onClick = onPlay) {
+                Icon(Icons.Filled.PlayArrow, contentDescription = "播放")
+            }
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Filled.Edit, contentDescription = "编辑")
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+            }
         }
     }
 }
 
+@Composable
+private fun SectionHeader(title: String, subtitle: String) {
+    Column(Modifier.fillMaxWidth()) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Text(
+            subtitle,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun EmptyScriptsCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Filled.TouchApp,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.size(30.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "启动悬浮控制面板后，在屏幕上点击「录制」即可保存新的手势脚本。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+        }
+    }
+}
+
+private fun formatScriptDate(timestamp: Long): String =
+    SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(timestamp))
