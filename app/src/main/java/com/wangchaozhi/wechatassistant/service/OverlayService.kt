@@ -7,6 +7,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.content.res.ColorStateList
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -132,6 +135,31 @@ class OverlayService : LifecycleService() {
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics
     ).toInt()
 
+    private fun glassButtonBg(): RippleDrawable {
+        val content = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(18).toFloat()
+            colors = intArrayOf(
+                Color.argb(80, 255, 255, 255),
+                Color.argb(40, 255, 255, 255),
+            )
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setStroke(dp(1), Color.argb(110, 255, 255, 255))
+        }
+        return RippleDrawable(
+            ColorStateList.valueOf(Color.argb(80, 255, 255, 255)),
+            content,
+            null,
+        )
+    }
+
+    private fun panelGlassBg(): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(18).toFloat()
+        setColor(Color.argb(160, 18, 18, 22))
+        setStroke(dp(1), Color.argb(70, 255, 255, 255))
+    }
+
     private fun smallBtn(ctx: Context): Button = Button(ctx).apply {
         textSize = 12f
         isAllCaps = false
@@ -140,8 +168,10 @@ class OverlayService : LifecycleService() {
         minimumWidth = 0
         minimumHeight = 0
         includeFontPadding = false
-        setPadding(dp(10), dp(5), dp(10), dp(5))
+        setPadding(dp(12), dp(6), dp(12), dp(6))
         stateListAnimator = null
+        background = glassButtonBg()
+        setTextColor(Color.WHITE)
     }
 
     private fun compactBtn(ctx: Context, label: String, onClick: () -> Unit): Button =
@@ -156,6 +186,8 @@ class OverlayService : LifecycleService() {
             includeFontPadding = false
             setPadding(dp(14), dp(8), dp(14), dp(8))
             stateListAnimator = null
+            background = glassButtonBg()
+            setTextColor(Color.WHITE)
             setOnClickListener { onClick() }
         }
 
@@ -164,12 +196,18 @@ class OverlayService : LifecycleService() {
         val ctx = this
         val container = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.argb(180, 30, 30, 30))
-            setPadding(dp(8), dp(6), dp(8), dp(6))
+            background = panelGlassBg()
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+        val rowSpacer = GradientDrawable().apply {
+            setSize(dp(4), 1)
+            setColor(Color.TRANSPARENT)
         }
         val topRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
+            dividerDrawable = rowSpacer
         }
         val label = TextView(ctx).apply {
             text = "连点"
@@ -188,7 +226,9 @@ class OverlayService : LifecycleService() {
         val nodesRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(4), 0, 0)
+            setPadding(0, dp(6), 0, 0)
+            showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
+            dividerDrawable = rowSpacer
         }
         val nodesLabel = TextView(ctx).apply {
             text = "节点"
