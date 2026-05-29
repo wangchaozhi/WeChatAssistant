@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Existing tag to release, for example v1.0.1."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name || inputs.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish release assets
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve tag
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG_NAME="${{ inputs.tag_name }}"
+          else
+            TAG_NAME="${GITHUB_REF_NAME}"
+          fi
+
+          if ! git check-ref-format "refs/tags/${TAG_NAME}"; then
+            echo "Invalid tag name: ${TAG_NAME}" >&2
+            exit 1
+          fi
+
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.tag_name }}
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build APK
+        shell: bash
+        run: ./gradlew :app:assembleDebug
+
+      - name: Prepare assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+          mkdir -p release
+
+          APK_NAME="WeChatAssistant-${TAG_NAME}.apk"
+          CHANGELOG_NAME="WeChatAssistant-${TAG_NAME}-changelog.txt"
+          cp app/build/outputs/apk/debug/app-debug.apk "release/${APK_NAME}"
+          (cd release && sha256sum "${APK_NAME}" > "${APK_NAME}.sha256")
+
+          PREVIOUS_TAG="$(git tag --sort=-creatordate | grep -v "^${TAG_NAME}$" | head -n 1 || true)"
+          {
+            echo "WeChatAssistant ${TAG_NAME}"
+            echo
+            echo "Commit: $(git rev-parse HEAD)"
+            echo "Built at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo
+            if [[ -n "$PREVIOUS_TAG" ]]; then
+              echo "Changes since ${PREVIOUS_TAG}:"
+              git log --oneline --no-decorate "${PREVIOUS_TAG}..HEAD"
+            else
+              echo "Changes:"
+              git log --oneline --no-decorate HEAD
+            fi
+          } > "release/${CHANGELOG_NAME}"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.resolve.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --notes-file "release/WeChatAssistant-${TAG_NAME}-changelog.txt"
+            gh release upload "$TAG_NAME" release/* --clobber
+          else
+            gh release create "$TAG_NAME" release/* \
+              --title "$TAG_NAME" \
+              --notes-file "release/WeChatAssistant-${TAG_NAME}-changelog.txt"
+          fi
