@@ -29,6 +29,13 @@ object ServiceBus {
     val lastBitmap = MutableStateFlow<Bitmap?>(null)
     val lastAiAnswer = MutableStateFlow<String?>(null)
 
+    sealed interface AiResult {
+        data class Success(val answer: String) : AiResult
+        data class Failure(val message: String) : AiResult
+    }
+
+    val lastAiResult = MutableStateFlow<AiResult?>(null)
+
     sealed interface OverlayCmd {
         data object StartRecording : OverlayCmd
         data object StopRecording : OverlayCmd

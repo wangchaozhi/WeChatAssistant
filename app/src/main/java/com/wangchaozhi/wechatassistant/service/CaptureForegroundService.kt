@@ -16,10 +16,8 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -63,7 +61,8 @@ class CaptureForegroundService : LifecycleService() {
                         val bmp = captureExcludingOverlay()
                         if (bmp == null) {
                             app.appendLog("capture() returned null")
-                            toastOnMain("截图失败，请确认截图服务已启动")
+                            ServiceBus.lastAiResult.value =
+                                ServiceBus.AiResult.Failure("截图失败，请确认截图服务已启动")
                             return@collectLatest
                         }
                         app.appendLog("capture() ok ${bmp.width}x${bmp.height}, calling Qwen…")
@@ -74,14 +73,16 @@ class CaptureForegroundService : LifecycleService() {
                             app.appendLog("runWithBitmap threw: ${t.javaClass.simpleName}: ${t.message}")
                             Result.failure(t)
                         }
-                        result.fold(
+                        ServiceBus.lastAiResult.value = result.fold(
                             onSuccess = {
                                 app.appendLog("Qwen success, answer length=${it.length}")
-                                toastOnMain("AI 已回答，已复制到剪贴板")
+                                ServiceBus.AiResult.Success(it)
                             },
                             onFailure = {
                                 app.appendLog("Qwen failure: ${it.javaClass.simpleName}: ${it.message}")
-                                toastOnMain("AI 请求失败：${it.message ?: it::class.java.simpleName}")
+                                ServiceBus.AiResult.Failure(
+                                    it.message ?: it::class.java.simpleName,
+                                )
                             },
                         )
                     }
@@ -235,12 +236,6 @@ class CaptureForegroundService : LifecycleService() {
         handlerThread?.quitSafely(); handlerThread = null
         bgHandler = null
         ServiceBus.captureReady.value = false
-    }
-
-    private fun toastOnMain(text: String) {
-        val ctx = applicationContext
-        val main = Handler(Looper.getMainLooper())
-        main.post { Toast.makeText(ctx, text, Toast.LENGTH_LONG).show() }
     }
 
     override fun onDestroy() {

@@ -8,6 +8,8 @@ import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -43,6 +45,10 @@ class OverlayService : LifecycleService() {
     private var recording = false
     private var recBtn: Button? = null
     private var statusLabel: TextView? = null
+    private var bubble: LinearLayout? = null
+    private var bubbleText: TextView? = null
+    private val bubbleHandler = Handler(Looper.getMainLooper())
+    private val hideBubble = Runnable { bubble?.visibility = View.GONE }
     private val recordedTouches = mutableListOf<ServiceBus.RawTouch>()
     private val shizukuReader by lazy { ShizukuTouchReader(this) }
 
@@ -68,6 +74,11 @@ class OverlayService : LifecycleService() {
                 panelView?.post {
                     panelView?.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
                 }
+            }
+        }
+        lifecycleScope.launch {
+            ServiceBus.lastAiResult.collect { res ->
+                if (res != null) panelView?.post { renderAiResult(res) }
             }
         }
     }
@@ -147,7 +158,8 @@ class OverlayService : LifecycleService() {
                     return@setOnClickListener
                 }
                 val prompt = App.from(ctx).settingsRepo.defaultPrompt
-                Toast.makeText(ctx, "正在请求 AI…", Toast.LENGTH_SHORT).show()
+                showBubbleLoading()
+                ServiceBus.lastAiResult.value = null
                 ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.TakeAndAsk(prompt))
             }
         }
@@ -169,6 +181,7 @@ class OverlayService : LifecycleService() {
         extraActions.addView(btnStop)
         container.addView(topRow)
         container.addView(extraActions)
+        container.addView(buildBubble(ctx))
 
         val params = WindowManager.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -186,6 +199,46 @@ class OverlayService : LifecycleService() {
         attachDrag(container, params)
         wm.addView(container, params)
         panelView = container
+    }
+
+    private fun buildBubble(ctx: Context): LinearLayout {
+        val outer = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(0, dp(6), 0, 0)
+        }
+        val status = TextView(ctx).apply {
+            textSize = 12f
+            setTextColor(Color.WHITE)
+            setPadding(dp(4), dp(2), dp(4), dp(2))
+        }
+        outer.addView(status)
+        bubble = outer
+        bubbleText = status
+        return outer
+    }
+
+    private fun showBubbleLoading() {
+        bubbleHandler.removeCallbacks(hideBubble)
+        bubble?.visibility = View.VISIBLE
+        bubbleText?.setTextColor(Color.WHITE)
+        bubbleText?.text = "正在请求 AI…"
+    }
+
+    private fun renderAiResult(res: ServiceBus.AiResult) {
+        bubbleHandler.removeCallbacks(hideBubble)
+        bubble?.visibility = View.VISIBLE
+        when (res) {
+            is ServiceBus.AiResult.Success -> {
+                bubbleText?.setTextColor(Color.WHITE)
+                bubbleText?.text = "已复制到粘贴板可粘贴"
+            }
+            is ServiceBus.AiResult.Failure -> {
+                bubbleText?.setTextColor(Color.parseColor("#FFB4AB"))
+                bubbleText?.text = "AI 请求失败：${res.message}"
+            }
+        }
+        bubbleHandler.postDelayed(hideBubble, 500)
     }
 
     private fun attachDrag(view: View, params: WindowManager.LayoutParams) {
@@ -350,6 +403,9 @@ class OverlayService : LifecycleService() {
         panelView = null
         recBtn = null
         statusLabel = null
+        bubbleHandler.removeCallbacks(hideBubble)
+        bubble = null
+        bubbleText = null
     }
 
     companion object {
