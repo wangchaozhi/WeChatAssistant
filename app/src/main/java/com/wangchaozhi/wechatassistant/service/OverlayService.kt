@@ -63,6 +63,13 @@ class OverlayService : LifecycleService() {
         lifecycleScope.launch {
             ServiceBus.playerState.collect { refreshStatus() }
         }
+        lifecycleScope.launch {
+            ServiceBus.overlayHidden.collect { hidden ->
+                panelView?.post {
+                    panelView?.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
+                }
+            }
+        }
     }
 
     private fun startForegroundCompat() {
@@ -135,7 +142,12 @@ class OverlayService : LifecycleService() {
         val btnAi = Button(ctx).apply {
             text = "AI"
             setOnClickListener {
+                if (!ServiceBus.captureReady.value) {
+                    Toast.makeText(ctx, "请先在主界面启动「截图服务」", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
                 val prompt = App.from(ctx).settingsRepo.defaultPrompt
+                Toast.makeText(ctx, "正在请求 AI…", Toast.LENGTH_SHORT).show()
                 ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.TakeAndAsk(prompt))
             }
         }

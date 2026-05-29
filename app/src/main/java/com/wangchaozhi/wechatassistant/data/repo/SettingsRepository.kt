@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.wangchaozhi.wechatassistant.BuildConfig
 
 class SettingsRepository(context: Context) {
 
@@ -23,7 +24,7 @@ class SettingsRepository(context: Context) {
     }
 
     var qwenApiKey: String
-        get() = prefs.getString(KEY_QWEN_API, "").orEmpty()
+        get() = prefs.getString(KEY_QWEN_API, "").orEmpty().ifBlank { BuildConfig.QWEN_API_KEY }
         set(value) = prefs.edit().putString(KEY_QWEN_API, value).apply()
 
     var defaultPrompt: String

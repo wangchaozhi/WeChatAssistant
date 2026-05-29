@@ -16,8 +16,10 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -26,9 +28,12 @@ import com.wangchaozhi.wechatassistant.R
 import com.wangchaozhi.wechatassistant.ui.MainActivity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import android.media.Image
 
 class CaptureForegroundService : LifecycleService() {
 
@@ -49,15 +54,36 @@ class CaptureForegroundService : LifecycleService() {
             ServiceBus.captureCmd.collectLatest { cmd ->
                 when (cmd) {
                     is ServiceBus.CaptureCmd.JustCapture -> {
-                        val bmp = capture()
+                        val bmp = captureExcludingOverlay()
                         ServiceBus.lastBitmap.value = bmp
                     }
                     is ServiceBus.CaptureCmd.TakeAndAsk -> {
-                        val bmp = capture() ?: return@collectLatest
+                        val app = App.from(this@CaptureForegroundService)
+                        app.appendLog("TakeAndAsk start, prompt='${cmd.prompt}'")
+                        val bmp = captureExcludingOverlay()
+                        if (bmp == null) {
+                            app.appendLog("capture() returned null")
+                            toastOnMain("截图失败，请确认截图服务已启动")
+                            return@collectLatest
+                        }
+                        app.appendLog("capture() ok ${bmp.width}x${bmp.height}, calling Qwen…")
                         ServiceBus.lastBitmap.value = bmp
-                        App.from(this@CaptureForegroundService)
-                            .screenshotAi
-                            .runWithBitmap(bmp, cmd.prompt)
+                        val result = try {
+                            app.screenshotAi.runWithBitmap(bmp, cmd.prompt)
+                        } catch (t: Throwable) {
+                            app.appendLog("runWithBitmap threw: ${t.javaClass.simpleName}: ${t.message}")
+                            Result.failure(t)
+                        }
+                        result.fold(
+                            onSuccess = {
+                                app.appendLog("Qwen success, answer length=${it.length}")
+                                toastOnMain("AI 已回答，已复制到剪贴板")
+                            },
+                            onFailure = {
+                                app.appendLog("Qwen failure: ${it.javaClass.simpleName}: ${it.message}")
+                                toastOnMain("AI 请求失败：${it.message ?: it::class.java.simpleName}")
+                            },
+                        )
                     }
                 }
             }
@@ -130,34 +156,59 @@ class CaptureForegroundService : LifecycleService() {
         densityDpi = resources.displayMetrics.densityDpi
     }
 
+    private fun imageToBitmap(img: Image): Bitmap {
+        val plane = img.planes[0]
+        val pixelStride = plane.pixelStride
+        val rowStride = plane.rowStride
+        val rowPadding = rowStride - pixelStride * widthPx
+        val bmp = Bitmap.createBitmap(
+            widthPx + rowPadding / pixelStride,
+            heightPx,
+            Bitmap.Config.ARGB_8888
+        )
+        bmp.copyPixelsFromBuffer(plane.buffer)
+        return if (rowPadding == 0) bmp
+        else Bitmap.createBitmap(bmp, 0, 0, widthPx, heightPx)
+    }
+
+    private suspend fun captureExcludingOverlay(): Bitmap? {
+        val wasOverlayActive = ServiceBus.overlayReady.value
+        if (!wasOverlayActive) return capture()
+        ServiceBus.overlayHidden.value = true
+        return try {
+            delay(180)
+            drainBuffer()
+            capture()
+        } finally {
+            ServiceBus.overlayHidden.value = false
+        }
+    }
+
+    private fun drainBuffer() {
+        val reader = imageReader ?: return
+        repeat(3) {
+            runCatching { reader.acquireLatestImage()?.close() }
+        }
+    }
+
     private suspend fun capture(): Bitmap? = withContext(Dispatchers.Default) {
         val reader = imageReader ?: return@withContext null
+        runCatching {
+            reader.acquireLatestImage()?.use { img ->
+                return@withContext imageToBitmap(img)
+            }
+        }
         val deferred = CompletableDeferred<Bitmap?>()
         reader.setOnImageAvailableListener({ r ->
-            try {
-                val img = r.acquireLatestImage()
-                if (img != null) {
-                    val plane = img.planes[0]
-                    val pixelStride = plane.pixelStride
-                    val rowStride = plane.rowStride
-                    val rowPadding = rowStride - pixelStride * widthPx
-                    val bmp = Bitmap.createBitmap(
-                        widthPx + rowPadding / pixelStride,
-                        heightPx,
-                        Bitmap.Config.ARGB_8888
-                    )
-                    bmp.copyPixelsFromBuffer(plane.buffer)
-                    val cropped = if (rowPadding == 0) bmp
-                    else Bitmap.createBitmap(bmp, 0, 0, widthPx, heightPx)
-                    img.close()
-                    deferred.complete(cropped)
-                }
-            } catch (t: Throwable) {
-                deferred.complete(null)
-            }
+            val bmp = runCatching {
+                r.acquireLatestImage()?.use { imageToBitmap(it) }
+            }.getOrNull()
             r.setOnImageAvailableListener(null, null)
+            deferred.complete(bmp)
         }, bgHandler)
-        deferred.await()
+        withTimeoutOrNull(5_000) { deferred.await() }.also {
+            reader.setOnImageAvailableListener(null, null)
+        }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -184,6 +235,12 @@ class CaptureForegroundService : LifecycleService() {
         handlerThread?.quitSafely(); handlerThread = null
         bgHandler = null
         ServiceBus.captureReady.value = false
+    }
+
+    private fun toastOnMain(text: String) {
+        val ctx = applicationContext
+        val main = Handler(Looper.getMainLooper())
+        main.post { Toast.makeText(ctx, text, Toast.LENGTH_LONG).show() }
     }
 
     override fun onDestroy() {

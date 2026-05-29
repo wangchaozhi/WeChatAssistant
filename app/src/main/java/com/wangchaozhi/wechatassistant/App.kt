@@ -15,6 +15,11 @@ import com.wangchaozhi.wechatassistant.util.ShizukuManager
 import com.wangchaozhi.wechatassistant.feature.qwen.QwenRepository
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
+import java.io.File
+import java.io.FileWriter
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class App : Application() {
@@ -33,14 +38,25 @@ class App : Application() {
 
     val settingsRepo: SettingsRepository by lazy { SettingsRepository(this) }
 
+    private val logFile: File by lazy {
+        File(filesDir, "qwen_debug.log")
+    }
+
+    fun appendLog(line: String) {
+        runCatching {
+            val ts = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
+            FileWriter(logFile, true).use { it.append("[$ts] $line\n") }
+        }
+    }
+
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(60, TimeUnit.SECONDS)
-            .addInterceptor(HttpLoggingInterceptor().apply {
-                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.HEADERS
-                else HttpLoggingInterceptor.Level.NONE
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .addInterceptor(HttpLoggingInterceptor { msg -> appendLog(msg) }.apply {
+                level = HttpLoggingInterceptor.Level.BODY
+                redactHeader("Authorization")
             })
             .build()
     }

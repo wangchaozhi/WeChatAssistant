@@ -10,6 +10,7 @@ object ServiceBus {
     val accessibilityReady = MutableStateFlow(false)
     val captureReady = MutableStateFlow(false)
     val overlayReady = MutableStateFlow(false)
+    val overlayHidden = MutableStateFlow(false)
 
     sealed interface PlayerCmd {
         data class Play(val scriptId: Long) : PlayerCmd
