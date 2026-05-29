@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -19,6 +21,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -104,16 +108,13 @@ fun ScriptEditorScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("动作列表（${actions.size}）", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.weight(1f))
-                    TextButton(onClick = { showAddAiDialog = true }) { Text("+ AI 步骤") }
-                    TextButton(onClick = {
-                        actions += Action(
-                            scriptId = scriptId,
-                            index = actions.size,
-                            type = ActionType.WAIT,
-                            startX = 0f, startY = 0f,
-                            durationMs = 1000L,
-                        )
-                    }) { Text("+ 等待") }
+                    AddActionMenu(
+                        onAddSimple = { type ->
+                            actions += newDefaultAction(scriptId, actions.size, type)
+                            editingIndex = actions.size - 1
+                        },
+                        onAddAi = { showAddAiDialog = true },
+                    )
                 }
             }
             itemsIndexed(actions, key = { i, _ -> i }) { i, a ->
@@ -193,6 +194,8 @@ private fun <T> MutableList<T>.move(from: Int, to: Int) {
 
 @Composable
 private fun ScriptMetaCard(script: Script, onChange: (Script) -> Unit) {
+    var loopText by remember(script.id) { mutableStateOf(script.loopCount.toString()) }
+    var speedText by remember(script.id) { mutableStateOf(script.speed.toString()) }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             OutlinedTextField(
@@ -205,20 +208,24 @@ private fun ScriptMetaCard(script: Script, onChange: (Script) -> Unit) {
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
-                    value = script.loopCount.toString(),
-                    onValueChange = {
-                        val v = it.toIntOrNull() ?: return@OutlinedTextField
-                        onChange(script.copy(loopCount = v))
+                    value = loopText,
+                    onValueChange = { raw ->
+                        val cleaned = raw.filter { it.isDigit() || it == '-' }
+                        loopText = cleaned
+                        cleaned.toIntOrNull()?.let { onChange(script.copy(loopCount = it)) }
                     },
                     label = { Text("循环次数（-1=∞）") },
                     singleLine = true,
                     modifier = Modifier.weight(1f),
                 )
                 OutlinedTextField(
-                    value = script.speed.toString(),
-                    onValueChange = {
-                        val v = it.toFloatOrNull() ?: return@OutlinedTextField
-                        onChange(script.copy(speed = v.coerceIn(0.1f, 10f)))
+                    value = speedText,
+                    onValueChange = { raw ->
+                        val cleaned = raw.filter { it.isDigit() || it == '.' }
+                        speedText = cleaned
+                        cleaned.toFloatOrNull()?.let {
+                            onChange(script.copy(speed = it.coerceIn(0.1f, 10f)))
+                        }
                     },
                     label = { Text("速度倍率") },
                     singleLine = true,
@@ -261,6 +268,77 @@ private fun ActionRow(
     }
 }
 
+@Composable
+private fun AddActionMenu(
+    onAddSimple: (ActionType) -> Unit,
+    onAddAi: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { expanded = true }) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Text("节点")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("点击") },
+                onClick = { onAddSimple(ActionType.TAP); expanded = false },
+            )
+            DropdownMenuItem(
+                text = { Text("滑动") },
+                onClick = { onAddSimple(ActionType.SWIPE); expanded = false },
+            )
+            DropdownMenuItem(
+                text = { Text("长按") },
+                onClick = { onAddSimple(ActionType.LONG_PRESS); expanded = false },
+            )
+            DropdownMenuItem(
+                text = { Text("等待") },
+                onClick = { onAddSimple(ActionType.WAIT); expanded = false },
+            )
+            DropdownMenuItem(
+                text = { Text("粘贴") },
+                onClick = { onAddSimple(ActionType.PASTE); expanded = false },
+            )
+            DropdownMenuItem(
+                text = { Text("回车") },
+                onClick = { onAddSimple(ActionType.ENTER); expanded = false },
+            )
+            DropdownMenuItem(
+                text = { Text("AI 步骤…") },
+                onClick = { onAddAi(); expanded = false },
+            )
+        }
+    }
+}
+
+private fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Action = when (type) {
+    ActionType.TAP -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 80L,
+    )
+    ActionType.LONG_PRESS -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 800L,
+    )
+    ActionType.SWIPE -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, endX = 0f, endY = 0f, durationMs = 300L,
+    )
+    ActionType.WAIT -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 1000L,
+    )
+    ActionType.SCREENSHOT_AI, ActionType.AI_TAP -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f,
+    )
+    ActionType.PASTE, ActionType.ENTER -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L,
+    )
+}
+
 private fun typeLabel(t: ActionType): String = when (t) {
     ActionType.TAP -> "点击"
     ActionType.SWIPE -> "滑动"
@@ -268,6 +346,8 @@ private fun typeLabel(t: ActionType): String = when (t) {
     ActionType.WAIT -> "等待"
     ActionType.SCREENSHOT_AI -> "AI 截图问答"
     ActionType.AI_TAP -> "AI 找图点击"
+    ActionType.PASTE -> "粘贴"
+    ActionType.ENTER -> "回车"
 }
 
 private fun describe(a: Action): String = when (a.type) {
@@ -278,6 +358,8 @@ private fun describe(a: Action): String = when (a.type) {
     ActionType.WAIT -> "等待 ${a.durationMs}ms"
     ActionType.SCREENSHOT_AI -> "prompt: \"${a.aiPrompt?.take(40) ?: ""}\""
     ActionType.AI_TAP -> "目标: \"${a.aiPrompt?.take(40) ?: ""}\""
+    ActionType.PASTE -> "粘贴到当前焦点输入框 · 延迟 ${a.delayBeforeMs}ms"
+    ActionType.ENTER -> "回车 (IME action 或换行) · 延迟 ${a.delayBeforeMs}ms"
 }
 
 @Composable
@@ -373,10 +455,14 @@ private fun EditActionDialog(
                             NumField(endY, { endY = it }, "终 Y", Modifier.weight(1f))
                         }
                     }
-                    ActionType.WAIT, ActionType.SCREENSHOT_AI, ActionType.AI_TAP -> { /* no coords */ }
+                    ActionType.WAIT, ActionType.SCREENSHOT_AI, ActionType.AI_TAP,
+                    ActionType.PASTE, ActionType.ENTER -> { /* no coords */ }
                 }
                 Spacer(Modifier.height(6.dp))
-                if (action.type != ActionType.SCREENSHOT_AI) {
+                if (action.type != ActionType.SCREENSHOT_AI &&
+                    action.type != ActionType.PASTE &&
+                    action.type != ActionType.ENTER
+                ) {
                     NumField(duration, { duration = it }, "持续 (ms)", Modifier.fillMaxWidth())
                 }
                 Spacer(Modifier.height(6.dp))

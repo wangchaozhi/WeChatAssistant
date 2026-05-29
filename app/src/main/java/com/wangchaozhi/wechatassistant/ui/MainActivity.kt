@@ -8,6 +8,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.compose.setContent
@@ -32,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -80,6 +82,7 @@ import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.service.CaptureForegroundService
 import com.wangchaozhi.wechatassistant.service.OverlayService
+import com.wangchaozhi.wechatassistant.service.ServiceBus
 import com.wangchaozhi.wechatassistant.ui.theme.WcaTheme
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -117,6 +120,7 @@ class MainActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this) {
             if (viewModel.screen.value != Screen.Home) viewModel.back() else finish()
         }
+        handleLaunchIntent(intent)
         setContent {
             WcaTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -127,14 +131,25 @@ class MainActivity : ComponentActivity() {
                             onOpenEditor = { id -> viewModel.navigate(Screen.Editor(id)) },
                             onOpenHistory = { viewModel.navigate(Screen.History) },
                             onOpenSettings = { viewModel.navigate(Screen.Settings) },
+                            onCreateScript = {
+                                viewModel.createEmptyScript { id ->
+                                    viewModel.navigate(Screen.Editor(id))
+                                }
+                            },
                             onRequestNotificationPermission = ::requestNotificationPermission,
                             onRequestOverlayPermission = ::requestOverlayPermission,
                             onRequestAccessibility = ::openAccessibilitySettings,
                             onStartCapture = ::requestMediaProjection,
                             onStopCapture = { CaptureForegroundService.stop(this) },
                             onStartOverlay = {
-                                if (Settings.canDrawOverlays(this)) OverlayService.start(this)
-                                else requestOverlayPermission()
+                                when {
+                                    !Settings.canDrawOverlays(this) -> requestOverlayPermission()
+                                    !ServiceBus.accessibilityReady.value ->
+                                        Toast.makeText(this, "请先开启「无障碍」服务再启动悬浮面板", Toast.LENGTH_LONG).show()
+                                    !ServiceBus.captureReady.value ->
+                                        Toast.makeText(this, "请先启动「截图服务」再启动悬浮面板", Toast.LENGTH_LONG).show()
+                                    else -> OverlayService.start(this)
+                                }
                             },
                             onStopOverlay = { OverlayService.stop(this) },
                         )
@@ -155,6 +170,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleLaunchIntent(intent)
+    }
+
+    private fun handleLaunchIntent(intent: Intent?) {
+        val id = intent?.getLongExtra(EXTRA_EDIT_SCRIPT_ID, -1L) ?: -1L
+        if (id > 0) viewModel.navigate(Screen.Editor(id))
     }
 
     private fun requestNotificationPermission() {
@@ -181,6 +207,10 @@ class MainActivity : ComponentActivity() {
         val mpm = getSystemService(MediaProjectionManager::class.java) ?: return
         mediaProjectionLauncher.launch(mpm.createScreenCaptureIntent())
     }
+
+    companion object {
+        const val EXTRA_EDIT_SCRIPT_ID = "extra_edit_script_id"
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -190,6 +220,7 @@ private fun MainScreen(
     onOpenEditor: (Long) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenSettings: () -> Unit,
+    onCreateScript: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onRequestOverlayPermission: () -> Unit,
     onRequestAccessibility: () -> Unit,
@@ -289,10 +320,23 @@ private fun MainScreen(
                 PlayerStatusCard(playerState, lastAnswer, onStop = viewModel::stop)
             }
             item {
-                SectionHeader(
-                    title = "脚本",
-                    subtitle = if (scripts.isEmpty()) "录制完成后会自动保存到这里" else "${scripts.size} 个可用脚本",
-                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("脚本", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (scripts.isEmpty()) "还没有脚本，点 + 新建或在悬浮窗录制"
+                            else "${scripts.size} 个可用脚本",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = onCreateScript) {
+                        Icon(Icons.Filled.Add, contentDescription = "新建脚本")
+                    }
+                }
             }
             items(scripts, key = { it.id }) { s ->
                 ScriptItem(
@@ -304,7 +348,7 @@ private fun MainScreen(
             }
             if (scripts.isEmpty()) {
                 item {
-                    EmptyScriptsCard()
+                    EmptyScriptsCard(onCreateScript = onCreateScript)
                 }
             }
         }
@@ -355,8 +399,10 @@ private fun HeroStatusCard(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val overlayEnabled = overlayReady || (accessibilityReady && captureReady)
                 Button(
                     onClick = if (overlayReady) onStopOverlay else onStartOverlay,
+                    enabled = overlayEnabled,
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.weight(1f),
                 ) {
@@ -616,25 +662,33 @@ private fun SectionHeader(title: String, subtitle: String) {
 }
 
 @Composable
-private fun EmptyScriptsCard() {
+private fun EmptyScriptsCard(onCreateScript: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
     ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.Filled.TouchApp,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                modifier = Modifier.size(30.dp),
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                "启动悬浮控制面板后，在屏幕上点击「录制」即可保存新的手势脚本。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onTertiaryContainer,
-            )
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.TouchApp,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                    modifier = Modifier.size(30.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "启动悬浮控制面板后，在屏幕上点击「录制」即可保存新的手势脚本；也可以直接新建一个空脚本手动编辑。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = onCreateScript, shape = RoundedCornerShape(8.dp)) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("新建空脚本")
+            }
         }
     }
 }

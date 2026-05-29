@@ -14,7 +14,7 @@ data class Script(
     val speed: Float = 1.0f,
 )
 
-enum class ActionType { TAP, SWIPE, LONG_PRESS, WAIT, SCREENSHOT_AI, AI_TAP }
+enum class ActionType { TAP, SWIPE, LONG_PRESS, WAIT, SCREENSHOT_AI, AI_TAP, PASTE, ENTER }
 
 @Entity(
     tableName = "actions",

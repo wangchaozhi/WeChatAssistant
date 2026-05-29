@@ -45,11 +45,14 @@ class OverlayService : LifecycleService() {
     private var recording = false
     private var recBtn: Button? = null
     private var statusLabel: TextView? = null
+    private var playStopBtn: Button? = null
+    private var scriptPickerView: View? = null
     private var bubble: LinearLayout? = null
     private var bubbleText: TextView? = null
     private val bubbleHandler = Handler(Looper.getMainLooper())
     private val hideBubble = Runnable { bubble?.visibility = View.GONE }
     private val recordedTouches = mutableListOf<ServiceBus.RawTouch>()
+    private val recordedPastes = mutableListOf<Long>()
     private val shizukuReader by lazy { ShizukuTouchReader(this) }
 
     override fun onCreate() {
@@ -79,6 +82,14 @@ class OverlayService : LifecycleService() {
         lifecycleScope.launch {
             ServiceBus.lastAiResult.collect { res ->
                 if (res != null) panelView?.post { renderAiResult(res) }
+            }
+        }
+        lifecycleScope.launch {
+            ServiceBus.pasteResult.collect { ok ->
+                val text = if (ok) "已粘贴" else "找不到可粘贴的输入框"
+                panelView?.post {
+                    Toast.makeText(this@OverlayService, text, Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -137,6 +148,11 @@ class OverlayService : LifecycleService() {
             orientation = LinearLayout.HORIZONTAL
             visibility = View.GONE
         }
+        val btnHome = Button(ctx).apply {
+            text = "↗"
+            minWidth = dp(44)
+            setOnClickListener { launchHome(null) }
+        }
         val btnMore = Button(ctx).apply {
             text = "⋮"
             minWidth = dp(44)
@@ -146,10 +162,21 @@ class OverlayService : LifecycleService() {
                 text = if (expanded) "×" else "⋮"
             }
         }
-        val btnPlay = Button(ctx).apply {
+        val btnPlayStop = Button(ctx).apply {
             text = "▶"
-            setOnClickListener { playMostRecent() }
+            setOnClickListener {
+                if (ServiceBus.playerState.value is ServiceBus.PlayerState.Playing) {
+                    ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Stop)
+                } else {
+                    if (!ServiceBus.accessibilityReady.value) {
+                        Toast.makeText(ctx, "请先开启「无障碍」服务", Toast.LENGTH_SHORT).show()
+                        return@setOnClickListener
+                    }
+                    lifecycleScope.launch { showScriptPicker(this@apply) }
+                }
+            }
         }
+        playStopBtn = btnPlayStop
         val btnAi = Button(ctx).apply {
             text = "AI"
             setOnClickListener {
@@ -163,22 +190,24 @@ class OverlayService : LifecycleService() {
                 ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.TakeAndAsk(prompt))
             }
         }
-        val btnStop = Button(ctx).apply {
-            text = "停止"
+        val btnPaste = Button(ctx).apply {
+            text = "粘贴"
             setOnClickListener {
-                if (ServiceBus.playerState.value !is ServiceBus.PlayerState.Playing) {
-                    Toast.makeText(ctx, "当前没有正在播放的脚本", Toast.LENGTH_SHORT).show()
-                } else {
-                    ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Stop)
+                if (recording) recordedPastes += System.currentTimeMillis()
+                if (!ServiceBus.accessibilityReady.value) {
+                    Toast.makeText(ctx, "请先开启「无障碍」服务", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
                 }
+                ServiceBus.pasteCmd.tryEmit(Unit)
             }
         }
         topRow.addView(label)
         topRow.addView(btnRec)
+        topRow.addView(btnHome)
         topRow.addView(btnMore)
-        extraActions.addView(btnPlay)
+        extraActions.addView(btnPlayStop)
         extraActions.addView(btnAi)
-        extraActions.addView(btnStop)
+        extraActions.addView(btnPaste)
         container.addView(topRow)
         container.addView(extraActions)
         container.addView(buildBubble(ctx))
@@ -289,6 +318,7 @@ class OverlayService : LifecycleService() {
             }
             recording = true
             recordedTouches.clear()
+            recordedPastes.clear()
             btn.text = "完成"
             ServiceBus.recordingMode.value = true
             ServiceBus.shizukuRecording.value = true
@@ -327,33 +357,54 @@ class OverlayService : LifecycleService() {
                 "播放中 · ${st.stepIndex + 1}/${st.totalSteps}"
             ServiceBus.PlayerState.Idle -> "连点"
         }
+        playStopBtn?.text = if (st is ServiceBus.PlayerState.Playing) "停止" else "▶"
     }
 
     private fun persistRecording() {
-        val touches = recordedTouches.toList().sortedBy { it.timestamp }
+        val touches = recordedTouches.toList()
+        val pastes = recordedPastes.toList()
         recordedTouches.clear()
-        if (touches.isEmpty()) return
-        val first = touches.first().timestamp
-        val actions = touches.mapIndexed { i, t ->
-            val dx = t.endX - t.startX
-            val dy = t.endY - t.startY
-            val type = when {
-                hypot(dx, dy) > 20f -> ActionType.SWIPE
-                t.durationMs > 500 -> ActionType.LONG_PRESS
-                else -> ActionType.TAP
+        recordedPastes.clear()
+        if (touches.isEmpty() && pastes.isEmpty()) return
+        val events: List<RecordedEvent> =
+            touches.map { RecordedEvent.Touch(it) } + pastes.map { RecordedEvent.Paste(it) }
+        val sorted = events.sortedBy { it.timestamp }
+        val firstTs = sorted.first().timestamp
+        val actions = sorted.mapIndexed { i, ev ->
+            val prevEnd = if (i == 0) firstTs else sorted[i - 1].endTimestamp
+            val delay = (ev.timestamp - prevEnd).coerceAtLeast(0)
+            when (ev) {
+                is RecordedEvent.Touch -> {
+                    val t = ev.raw
+                    val dx = t.endX - t.startX
+                    val dy = t.endY - t.startY
+                    val type = when {
+                        hypot(dx, dy) > 20f -> ActionType.SWIPE
+                        t.durationMs > 500 -> ActionType.LONG_PRESS
+                        else -> ActionType.TAP
+                    }
+                    Action(
+                        scriptId = 0,
+                        index = i,
+                        type = type,
+                        startX = t.startX,
+                        startY = t.startY,
+                        endX = t.endX,
+                        endY = t.endY,
+                        durationMs = t.durationMs,
+                        delayBeforeMs = delay,
+                    )
+                }
+                is RecordedEvent.Paste -> Action(
+                    scriptId = 0,
+                    index = i,
+                    type = ActionType.PASTE,
+                    startX = 0f,
+                    startY = 0f,
+                    durationMs = 0L,
+                    delayBeforeMs = delay,
+                )
             }
-            val prev = if (i == 0) first else touches[i - 1].timestamp + touches[i - 1].durationMs
-            Action(
-                scriptId = 0,
-                index = i,
-                type = type,
-                startX = t.startX,
-                startY = t.startY,
-                endX = t.endX,
-                endY = t.endY,
-                durationMs = t.durationMs,
-                delayBeforeMs = (t.timestamp - prev).coerceAtLeast(0),
-            )
         }
         val name = "脚本_" + SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(Date())
         val script = Script(name = name)
@@ -362,29 +413,96 @@ class OverlayService : LifecycleService() {
         }
     }
 
-    private fun playMostRecent() {
-        if (!ServiceBus.accessibilityReady.value) {
-            Toast.makeText(this, "请先开启「无障碍」服务", Toast.LENGTH_SHORT).show()
+    private sealed interface RecordedEvent {
+        val timestamp: Long
+        val endTimestamp: Long
+        data class Touch(val raw: ServiceBus.RawTouch) : RecordedEvent {
+            override val timestamp: Long get() = raw.timestamp
+            override val endTimestamp: Long get() = raw.timestamp + raw.durationMs
+        }
+        data class Paste(override val timestamp: Long) : RecordedEvent {
+            override val endTimestamp: Long get() = timestamp
+        }
+    }
+
+    private suspend fun showScriptPicker(anchor: View) {
+        if (scriptPickerView != null) {
+            dismissScriptPicker()
             return
         }
-        if (ServiceBus.playerState.value is ServiceBus.PlayerState.Playing) {
-            Toast.makeText(this, "正在播放中，先停止", Toast.LENGTH_SHORT).show()
-            return
+        val scripts = App.from(this).scriptRepo.observeScripts().first()
+        val ctx = this
+        val list = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.argb(230, 40, 40, 40))
+            setPadding(dp(4), dp(4), dp(4), dp(4))
         }
-        lifecycleScope.launch {
-            val list = App.from(this@OverlayService).scriptRepo.observeScripts().first()
-            val latest = list.firstOrNull()
-            if (latest == null) {
-                Toast.makeText(this@OverlayService, "还没有脚本", Toast.LENGTH_SHORT).show()
-                return@launch
+        scripts.forEach { s ->
+            val item = TextView(ctx).apply {
+                text = s.name
+                setTextColor(Color.WHITE)
+                textSize = 14f
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                setOnClickListener {
+                    ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Play(s.id))
+                    dismissScriptPicker()
+                }
             }
-            val data = App.from(this@OverlayService).scriptRepo.load(latest.id)
-            if (data == null || data.actions.isEmpty()) {
-                Toast.makeText(this@OverlayService, "脚本「${latest.name}」没有动作", Toast.LENGTH_SHORT).show()
-                return@launch
-            }
-            ServiceBus.playerCmd.emit(ServiceBus.PlayerCmd.Play(latest.id))
+            list.addView(item)
         }
+        val newItem = TextView(ctx).apply {
+            text = "+ 新建脚本"
+            setTextColor(Color.parseColor("#80D8FF"))
+            textSize = 14f
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setOnClickListener {
+                dismissScriptPicker()
+                lifecycleScope.launch {
+                    val name = "脚本_" + SimpleDateFormat("MMdd_HHmm", Locale.getDefault())
+                        .format(Date())
+                    val id = App.from(this@OverlayService).scriptRepo
+                        .save(Script(name = name), emptyList())
+                    launchHome(id)
+                }
+            }
+        }
+        list.addView(newItem)
+        val loc = IntArray(2)
+        anchor.getLocationOnScreen(loc)
+        val params = WindowManager.LayoutParams(
+            dp(200),
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = loc[0]
+            y = loc[1] + anchor.height
+        }
+        list.setOnTouchListener { _, e ->
+            if (e.action == MotionEvent.ACTION_OUTSIDE) {
+                dismissScriptPicker(); true
+            } else false
+        }
+        wm.addView(list, params)
+        scriptPickerView = list
+    }
+
+    private fun dismissScriptPicker() {
+        scriptPickerView?.let { runCatching { wm.removeView(it) } }
+        scriptPickerView = null
+    }
+
+    private fun launchHome(scriptIdToEdit: Long?) {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            if (scriptIdToEdit != null) {
+                putExtra(MainActivity.EXTRA_EDIT_SCRIPT_ID, scriptIdToEdit)
+            }
+        }
+        startActivity(intent)
     }
 
     private fun overlayType(): Int =
@@ -406,6 +524,8 @@ class OverlayService : LifecycleService() {
         bubbleHandler.removeCallbacks(hideBubble)
         bubble = null
         bubbleText = null
+        playStopBtn = null
+        dismissScriptPicker()
     }
 
     companion object {

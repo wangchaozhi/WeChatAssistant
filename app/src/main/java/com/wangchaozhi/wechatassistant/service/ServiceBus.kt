@@ -44,6 +44,9 @@ object ServiceBus {
 
     val overlayCmd = MutableSharedFlow<OverlayCmd>(extraBufferCapacity = 16)
 
+    val pasteCmd = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
+    val pasteResult = MutableSharedFlow<Boolean>(extraBufferCapacity = 4)
+
     val recordingMode = MutableStateFlow(false)
     val shizukuRecording = MutableStateFlow(false)
     val recordedTap = MutableSharedFlow<RawTouch>(extraBufferCapacity = 64)

@@ -17,6 +17,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 sealed interface Screen {
     data object Home : Screen
@@ -83,6 +86,14 @@ class MainViewModel(
 
     fun delete(scriptId: Long) {
         viewModelScope.launch { scriptRepo.delete(scriptId) }
+    }
+
+    fun createEmptyScript(onCreated: (Long) -> Unit) {
+        viewModelScope.launch {
+            val name = "脚本_" + SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(Date())
+            val id = scriptRepo.save(Script(name = name), emptyList())
+            onCreated(id)
+        }
     }
 
     suspend fun loadScript(id: Long) = scriptRepo.load(id)
