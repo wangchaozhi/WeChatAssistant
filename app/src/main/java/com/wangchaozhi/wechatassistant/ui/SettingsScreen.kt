@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
@@ -57,6 +58,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var apiKey by remember { mutableStateOf(viewModel.apiKey) }
     var prompt by remember { mutableStateOf(viewModel.defaultPrompt) }
     var model by remember { mutableStateOf(viewModel.qwenModel) }
+    var thumbSide by remember { mutableStateOf(viewModel.thumbnailMaxSide) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -87,6 +89,12 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onPrompt = { prompt = it; viewModel.defaultPrompt = it },
                     model = model,
                     onModel = { model = it; viewModel.qwenModel = it },
+                )
+            }
+            item {
+                ThumbnailCard(
+                    side = thumbSide,
+                    onSide = { thumbSide = it; viewModel.thumbnailMaxSide = it },
                 )
             }
             item { ShizukuCard(viewModel) }
@@ -180,6 +188,84 @@ private fun ModelPicker(model: String, onModel: (String) -> Unit) {
         }
     }
 }
+
+@Composable
+private fun ThumbnailCard(side: Int, onSide: (Int) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SettingsIcon(Icons.Filled.Image)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("历史截图质量", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "AI 历史中保存截图的分辨率",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            ThumbnailSidePicker(side = side, onSide = onSide)
+        }
+    }
+}
+
+@Composable
+private fun ThumbnailSidePicker(side: Int, onSide: (Int) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = THUMB_PRESETS.firstOrNull { it.side == side }?.label
+        ?: "自定义 (${side}px)"
+    Box(modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("分辨率", style = MaterialTheme.typography.labelMedium)
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            THUMB_PRESETS.forEach { p ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(p.label)
+                            Text(
+                                p.hint,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    onClick = {
+                        onSide(p.side)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+private data class ThumbPreset(val side: Int, val label: String, val hint: String)
+
+private val THUMB_PRESETS = listOf(
+    ThumbPreset(480, "极简 480px", "默认，最省空间，预览较糊"),
+    ThumbPreset(720, "标清 720px", "稍清晰，体积仍小"),
+    ThumbPreset(1440, "清晰 1440px", "平衡清晰度与体积"),
+    ThumbPreset(2160, "高清 2160px", "原图级，磁盘占用较大"),
+)
 
 private val QWEN_OMNI_MODELS = listOf(
     "qwen3.5-omni-flash",

@@ -61,6 +61,10 @@ class MainViewModel(
         get() = settings.qwenModel
         set(value) { settings.qwenModel = value }
 
+    var thumbnailMaxSide: Int
+        get() = settings.thumbnailMaxSide
+        set(value) { settings.thumbnailMaxSide = value }
+
     val shizukuState: StateFlow<ShizukuManager.Status> = ShizukuManager.state
 
     fun requestShizukuPermission() {
