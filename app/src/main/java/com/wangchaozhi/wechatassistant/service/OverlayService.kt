@@ -100,7 +100,7 @@ class OverlayService : LifecycleService() {
             text = "连点"
             setTextColor(Color.WHITE)
             textSize = 13f
-            minWidth = dp(140)
+            minWidth = dp(96)
             gravity = Gravity.CENTER_VERTICAL
             isSingleLine = true
             setPadding(0, 0, dp(8), 0)
@@ -111,6 +111,19 @@ class OverlayService : LifecycleService() {
             setOnClickListener { toggleRecording(this) }
         }
         recBtn = btnRec
+        val extraActions = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            visibility = View.GONE
+        }
+        val btnMore = Button(ctx).apply {
+            text = "⋮"
+            minWidth = dp(44)
+            setOnClickListener {
+                val expanded = extraActions.visibility != View.VISIBLE
+                extraActions.visibility = if (expanded) View.VISIBLE else View.GONE
+                text = if (expanded) "×" else "⋮"
+            }
+        }
         val btnPlay = Button(ctx).apply {
             text = "▶"
             setOnClickListener { playMostRecent() }
@@ -134,9 +147,11 @@ class OverlayService : LifecycleService() {
         }
         container.addView(label)
         container.addView(btnRec)
-        container.addView(btnPlay)
-        container.addView(btnAi)
-        container.addView(btnStop)
+        container.addView(btnMore)
+        extraActions.addView(btnPlay)
+        extraActions.addView(btnAi)
+        extraActions.addView(btnStop)
+        container.addView(extraActions)
 
         val params = WindowManager.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
