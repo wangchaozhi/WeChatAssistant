@@ -1,0 +1,95 @@
+name: Tag
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - app/build.gradle.kts
+      - .github/workflows/tag.yml
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Tag to create, for example v1.0.1. Leave empty to use app versionName."
+        required: false
+        type: string
+      ref:
+        description: "Commit, branch, or tag to tag. Leave empty to use the workflow ref."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tag-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Create tag
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG_NAME="${{ inputs.tag_name }}"
+          TARGET_REF="${{ inputs.ref }}"
+
+          if [[ -z "$TAG_NAME" ]]; then
+            VERSION_NAME="$(sed -nE 's/.*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)"
+            if [[ -z "$VERSION_NAME" ]]; then
+              echo "Could not find versionName in app/build.gradle.kts" >&2
+              exit 1
+            fi
+            TAG_NAME="v${VERSION_NAME}"
+          fi
+
+          if ! git check-ref-format "refs/tags/${TAG_NAME}"; then
+            echo "Invalid tag name: ${TAG_NAME}" >&2
+            exit 1
+          fi
+
+          if [[ -z "$TARGET_REF" ]]; then
+            TARGET_REF="$GITHUB_SHA"
+          fi
+
+          TARGET_SHA="$(git rev-parse "${TARGET_REF}^{commit}")"
+
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "target_sha=${TARGET_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+          TARGET_SHA="${{ steps.resolve.outputs.target_sha }}"
+
+          git fetch --tags origin
+
+          EXISTING_SHA="$(git rev-parse -q --verify "refs/tags/${TAG_NAME}^{commit}" || true)"
+          if [[ -n "$EXISTING_SHA" ]]; then
+            if [[ "$EXISTING_SHA" == "$TARGET_SHA" ]]; then
+              echo "Tag ${TAG_NAME} already points to ${TARGET_SHA}; nothing to do."
+              exit 0
+            fi
+            echo "Tag ${TAG_NAME} already exists at ${EXISTING_SHA}, not ${TARGET_SHA}." >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "$TAG_NAME" "$TARGET_SHA" -m "Release ${TAG_NAME}"
+          git push origin "$TAG_NAME"
