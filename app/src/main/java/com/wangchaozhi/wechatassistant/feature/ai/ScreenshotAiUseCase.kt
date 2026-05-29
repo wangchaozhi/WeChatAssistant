@@ -33,14 +33,23 @@ class ScreenshotAiUseCase(
         prompt: String,
         scriptId: Long? = null,
     ): Result<String> {
-        val model = App.from(context).settingsRepo.qwenModel
-        val effective = prompt.ifBlank { App.from(context).settingsRepo.defaultPrompt }
-        val result = qwen.ask(bitmap, effective, model)
+        val settings = App.from(context).settingsRepo
+        val model = settings.qwenModel
+        val maxSide = settings.aiImageMaxSide
+        val quality = qualityFor(maxSide)
+        val effective = prompt.ifBlank { settings.defaultPrompt }
+        val result = qwen.ask(bitmap, effective, model, maxSide = maxSide, quality = quality)
         result.onSuccess { answer ->
             context.copyToClipboard(answer)
             ServiceBus.lastAiAnswer.value = answer
             runCatching { history.save(bitmap, effective, answer, scriptId) }
         }
         return result
+    }
+
+    private fun qualityFor(maxSide: Int): Int = when {
+        maxSide <= 1024 -> 75
+        maxSide <= 1280 -> 80
+        else -> 85
     }
 }

@@ -68,6 +68,10 @@ class MainViewModel(
         get() = settings.thumbnailMaxSide
         set(value) { settings.thumbnailMaxSide = value }
 
+    var aiImageMaxSide: Int
+        get() = settings.aiImageMaxSide
+        set(value) { settings.aiImageMaxSide = value }
+
     val shizukuState: StateFlow<ShizukuManager.Status> = ShizukuManager.state
 
     fun requestShizukuPermission() {

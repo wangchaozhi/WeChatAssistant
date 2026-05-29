@@ -59,6 +59,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var prompt by remember { mutableStateOf(viewModel.defaultPrompt) }
     var model by remember { mutableStateOf(viewModel.qwenModel) }
     var thumbSide by remember { mutableStateOf(viewModel.thumbnailMaxSide) }
+    var aiSide by remember { mutableStateOf(viewModel.aiImageMaxSide) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -89,6 +90,12 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onPrompt = { prompt = it; viewModel.defaultPrompt = it },
                     model = model,
                     onModel = { model = it; viewModel.qwenModel = it },
+                )
+            }
+            item {
+                AiImageCard(
+                    side = aiSide,
+                    onSide = { aiSide = it; viewModel.aiImageMaxSide = it },
                 )
             }
             item {
@@ -190,6 +197,37 @@ private fun ModelPicker(model: String, onModel: (String) -> Unit) {
 }
 
 @Composable
+private fun AiImageCard(side: Int, onSide: (Int) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SettingsIcon(Icons.Filled.Cloud)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("AI 截图质量", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "发给千问的截图分辨率，越大 token 越多",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            SidePicker(
+                presets = AI_IMAGE_PRESETS,
+                side = side,
+                onSide = onSide,
+                label = "上传分辨率",
+            )
+        }
+    }
+}
+
+@Composable
 private fun ThumbnailCard(side: Int, onSide: (Int) -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -210,15 +248,25 @@ private fun ThumbnailCard(side: Int, onSide: (Int) -> Unit) {
                 }
             }
             Spacer(Modifier.height(4.dp))
-            ThumbnailSidePicker(side = side, onSide = onSide)
+            SidePicker(
+                presets = THUMB_PRESETS,
+                side = side,
+                onSide = onSide,
+                label = "分辨率",
+            )
         }
     }
 }
 
 @Composable
-private fun ThumbnailSidePicker(side: Int, onSide: (Int) -> Unit) {
+private fun SidePicker(
+    presets: List<ThumbPreset>,
+    side: Int,
+    onSide: (Int) -> Unit,
+    label: String,
+) {
     var expanded by remember { mutableStateOf(false) }
-    val label = THUMB_PRESETS.firstOrNull { it.side == side }?.label
+    val current = presets.firstOrNull { it.side == side }?.label
         ?: "自定义 (${side}px)"
     Box(modifier = Modifier.fillMaxWidth()) {
         OutlinedButton(
@@ -227,8 +275,8 @@ private fun ThumbnailSidePicker(side: Int, onSide: (Int) -> Unit) {
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(Modifier.weight(1f)) {
-                Text("分辨率", style = MaterialTheme.typography.labelMedium)
-                Text(label, style = MaterialTheme.typography.bodyMedium)
+                Text(label, style = MaterialTheme.typography.labelMedium)
+                Text(current, style = MaterialTheme.typography.bodyMedium)
             }
         }
         DropdownMenu(
@@ -236,7 +284,7 @@ private fun ThumbnailSidePicker(side: Int, onSide: (Int) -> Unit) {
             onDismissRequest = { expanded = false },
             modifier = Modifier.fillMaxWidth(),
         ) {
-            THUMB_PRESETS.forEach { p ->
+            presets.forEach { p ->
                 DropdownMenuItem(
                     text = {
                         Column {
@@ -265,6 +313,12 @@ private val THUMB_PRESETS = listOf(
     ThumbPreset(720, "标清 720px", "稍清晰，体积仍小"),
     ThumbPreset(1440, "清晰 1440px", "平衡清晰度与体积"),
     ThumbPreset(2160, "高清 2160px", "原图级，磁盘占用较大"),
+)
+
+private val AI_IMAGE_PRESETS = listOf(
+    ThumbPreset(1024, "省 token 1024px", "约 600 视觉 token / 次"),
+    ThumbPreset(1280, "默认 1280px", "约 940 视觉 token / 次，平衡"),
+    ThumbPreset(1568, "高识别 1568px", "约 1450 视觉 token / 次，识别更稳"),
 )
 
 private val QWEN_OMNI_MODELS = listOf(
