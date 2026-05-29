@@ -214,18 +214,16 @@ class CaptureForegroundService : LifecycleService() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        if (projection != null) {
-            virtualDisplay?.release()
+        val vd = virtualDisplay ?: return
+        val oldW = widthPx
+        val oldH = heightPx
+        measureDisplay()
+        if (oldW == widthPx && oldH == heightPx) return
+        runCatching {
             imageReader?.close()
-            measureDisplay()
             imageReader = ImageReader.newInstance(widthPx, heightPx, PixelFormat.RGBA_8888, 2)
-            virtualDisplay = projection?.createVirtualDisplay(
-                "wca-capture",
-                widthPx, heightPx, densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                imageReader!!.surface,
-                null, bgHandler
-            )
+            vd.resize(widthPx, heightPx, densityDpi)
+            vd.surface = imageReader?.surface
         }
     }
 
