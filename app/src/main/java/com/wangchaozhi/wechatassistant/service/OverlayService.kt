@@ -92,9 +92,13 @@ class OverlayService : LifecycleService() {
         if (panelView != null) return
         val ctx = this
         val container = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.argb(180, 30, 30, 30))
             setPadding(dp(8), dp(6), dp(8), dp(6))
+        }
+        val topRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
         val label = TextView(ctx).apply {
             text = "连点"
@@ -145,12 +149,13 @@ class OverlayService : LifecycleService() {
                 }
             }
         }
-        container.addView(label)
-        container.addView(btnRec)
-        container.addView(btnMore)
+        topRow.addView(label)
+        topRow.addView(btnRec)
+        topRow.addView(btnMore)
         extraActions.addView(btnPlay)
         extraActions.addView(btnAi)
         extraActions.addView(btnStop)
+        container.addView(topRow)
         container.addView(extraActions)
 
         val params = WindowManager.LayoutParams(
