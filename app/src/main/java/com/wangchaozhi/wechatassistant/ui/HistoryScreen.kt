@@ -31,8 +31,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import com.wangchaozhi.wechatassistant.ui.theme.GlassTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -78,7 +78,7 @@ fun HistoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    TextButton(onClick = viewModel::clearHistory) { Text("清空") }
+                    GlassTextButton(onClick = viewModel::clearHistory) { Text("清空") }
                 },
             )
         },
@@ -135,8 +135,8 @@ private fun AnswerDetailDialog(
     var fullscreen by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onCopy) { Text("复制") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+        confirmButton = { GlassTextButton(onClick = onCopy) { Text("复制") } },
+        dismissButton = { GlassTextButton(onClick = onDismiss) { Text("关闭") } },
         title = { Text(formatTime(answer.createdAt)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -258,9 +258,9 @@ private fun AnswerRow(
                 )
                 Spacer(Modifier.height(6.dp))
                 Row {
-                    TextButton(onClick = onCopy) { Text("复制") }
+                    GlassTextButton(onClick = onCopy) { Text("复制") }
                     Spacer(Modifier.size(8.dp))
-                    TextButton(onClick = onDelete) { Text("删除") }
+                    GlassTextButton(onClick = onDelete) { Text("删除") }
                 }
             }
         }

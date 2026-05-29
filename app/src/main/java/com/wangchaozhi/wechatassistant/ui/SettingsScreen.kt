@@ -23,7 +23,6 @@ import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -32,13 +31,14 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import com.wangchaozhi.wechatassistant.ui.theme.GlassFilledButton
+import com.wangchaozhi.wechatassistant.ui.theme.GlassOutlinedButton
+import com.wangchaozhi.wechatassistant.ui.theme.GlassTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -159,7 +159,7 @@ private fun QwenCard(
 private fun ModelPicker(model: String, onModel: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(
+        GlassOutlinedButton(
             onClick = { expanded = true },
             shape = RoundedCornerShape(8.dp),
             modifier = Modifier.fillMaxWidth(),
@@ -269,7 +269,7 @@ private fun SidePicker(
     val current = presets.firstOrNull { it.side == side }?.label
         ?: "自定义 (${side}px)"
     Box(modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(
+        GlassOutlinedButton(
             onClick = { expanded = true },
             shape = RoundedCornerShape(8.dp),
             modifier = Modifier.fillMaxWidth(),
@@ -379,18 +379,18 @@ fun ShizukuCard(viewModel: MainViewModel) {
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (state.available && !state.granted) {
-                    Button(onClick = viewModel::requestShizukuPermission, shape = RoundedCornerShape(8.dp)) {
+                    GlassFilledButton(onClick = viewModel::requestShizukuPermission, shape = RoundedCornerShape(8.dp)) {
                         Icon(Icons.Filled.Security, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("授权")
                     }
                 }
-                OutlinedButton(onClick = viewModel::refreshShizuku, shape = RoundedCornerShape(8.dp)) {
+                GlassOutlinedButton(onClick = viewModel::refreshShizuku, shape = RoundedCornerShape(8.dp)) {
                     Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("刷新")
                 }
-                TextButton(onClick = { showHelp = true }) { Text("无线调试启动") }
+                GlassTextButton(onClick = { showHelp = true }) { Text("无线调试启动") }
             }
         }
     }
@@ -414,7 +414,7 @@ fun ShizukuCard(viewModel: MainViewModel) {
                     )
                 }
             },
-            confirmButton = { Button(onClick = { showHelp = false }) { Text("好") } },
+            confirmButton = { GlassFilledButton(onClick = { showHelp = false }) { Text("好") } },
         )
     }
 }

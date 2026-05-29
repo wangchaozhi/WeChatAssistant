@@ -44,7 +44,6 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
@@ -53,11 +52,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.wangchaozhi.wechatassistant.ui.theme.GlassFilledButton
+import com.wangchaozhi.wechatassistant.ui.theme.GlassOutlinedButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -400,7 +399,7 @@ private fun HeroStatusCard(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val overlayEnabled = overlayReady || (accessibilityReady && captureReady)
-                Button(
+                GlassFilledButton(
                     onClick = if (overlayReady) onStopOverlay else onStartOverlay,
                     enabled = overlayEnabled,
                     shape = RoundedCornerShape(8.dp),
@@ -414,7 +413,7 @@ private fun HeroStatusCard(
                     Spacer(Modifier.width(6.dp))
                     Text(if (overlayReady) "关闭面板" else "启动面板")
                 }
-                OutlinedButton(
+                GlassOutlinedButton(
                     onClick = if (captureReady) onStopCapture else onStartCapture,
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.weight(1f),
@@ -510,7 +509,7 @@ private fun PermRow(
             )
         }
         if (action != null) {
-            OutlinedButton(
+            GlassOutlinedButton(
                 onClick = action.second,
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.defaultMinSize(minWidth = 78.dp),
@@ -569,7 +568,7 @@ private fun PlayerStatusCard(
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
-                    Button(onClick = onStop, shape = RoundedCornerShape(8.dp)) {
+                    GlassFilledButton(onClick = onStop, shape = RoundedCornerShape(8.dp)) {
                         Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("停止")
@@ -684,7 +683,7 @@ private fun EmptyScriptsCard(onCreateScript: () -> Unit) {
                 )
             }
             Spacer(Modifier.height(12.dp))
-            Button(onClick = onCreateScript, shape = RoundedCornerShape(8.dp)) {
+            GlassFilledButton(onClick = onCreateScript, shape = RoundedCornerShape(8.dp)) {
                 Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("新建空脚本")

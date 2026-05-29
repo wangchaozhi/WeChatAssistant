@@ -19,7 +19,6 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -29,12 +28,13 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import com.wangchaozhi.wechatassistant.ui.theme.GlassFilledButton
+import com.wangchaozhi.wechatassistant.ui.theme.GlassOutlinedButton
+import com.wangchaozhi.wechatassistant.ui.theme.GlassTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -139,10 +139,10 @@ fun ScriptEditorScreen(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) {
+                    GlassOutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) {
                         Text("取消")
                     }
-                    Button(
+                    GlassFilledButton(
                         onClick = {
                             val snapshot = actions.toList()
                             viewModel.saveScript(s, snapshot) { onBack() }
@@ -263,7 +263,7 @@ private fun ActionRow(
             IconButton(onClick = onMoveDown, enabled = canMoveDown) {
                 Icon(Icons.Default.ArrowDownward, contentDescription = "下移")
             }
-            TextButton(onClick = onDelete) { Text("删除") }
+            GlassTextButton(onClick = onDelete) { Text("删除") }
         }
     }
 }
@@ -275,7 +275,7 @@ private fun AddActionMenu(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
-        TextButton(onClick = { expanded = true }) {
+        GlassTextButton(onClick = { expanded = true }) {
             Icon(Icons.Default.Add, contentDescription = null)
             Text("节点")
         }
@@ -408,11 +408,11 @@ private fun AddAiStepDialog(
             }
         },
         confirmButton = {
-            Button(onClick = {
+            GlassFilledButton(onClick = {
                 onConfirm(type, prompt, delayText.toLongOrNull() ?: 0L)
             }) { Text("添加") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        dismissButton = { GlassTextButton(onClick = onDismiss) { Text("取消") } },
     )
 }
 
@@ -481,7 +481,7 @@ private fun EditActionDialog(
             }
         },
         confirmButton = {
-            Button(onClick = {
+            GlassFilledButton(onClick = {
                 onConfirm(
                     action.copy(
                         startX = startX.toFloatOrNull() ?: action.startX,
@@ -495,7 +495,7 @@ private fun EditActionDialog(
                 )
             }) { Text("保存") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        dismissButton = { GlassTextButton(onClick = onDismiss) { Text("取消") } },
     )
 }
 
