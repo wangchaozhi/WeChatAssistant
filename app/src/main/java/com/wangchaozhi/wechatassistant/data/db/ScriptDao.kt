@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Update
 import com.wangchaozhi.wechatassistant.data.model.Action
 import com.wangchaozhi.wechatassistant.data.model.Script
 import kotlinx.coroutines.flow.Flow
@@ -23,6 +24,9 @@ interface ScriptDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertScript(script: Script): Long
+
+    @Update
+    suspend fun updateScript(script: Script)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertActions(actions: List<Action>)

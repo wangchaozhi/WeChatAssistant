@@ -18,7 +18,7 @@ class ScriptRepository(private val dao: ScriptDao) {
     suspend fun save(script: Script, actions: List<Action>): Long =
         dao.replaceScript(script, actions)
 
-    suspend fun updateScript(script: Script): Long = dao.insertScript(script)
+    suspend fun updateScript(script: Script) = dao.updateScript(script)
 
     suspend fun replaceActions(scriptId: Long, actions: List<Action>) {
         val reindexed = actions.mapIndexed { i, a ->

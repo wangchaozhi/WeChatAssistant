@@ -17,6 +17,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -48,6 +49,7 @@ class OverlayService : LifecycleService() {
     private var playStopBtn: Button? = null
     private var extraActionsRow: LinearLayout? = null
     private var scriptPickerView: View? = null
+    private var renameView: View? = null
     private var bubble: LinearLayout? = null
     private var bubbleText: TextView? = null
     private var bubbleActions: LinearLayout? = null
@@ -274,7 +276,7 @@ class OverlayService : LifecycleService() {
         val renameBtn = Button(ctx)
         val deleteBtn = Button(ctx)
         val closeBtn = Button(ctx).apply {
-            text = "×"
+            text = "确定"
             minWidth = dp(44)
             setOnClickListener { hideBubbleNow() }
         }
@@ -295,6 +297,7 @@ class OverlayService : LifecycleService() {
         bubbleHandler.removeCallbacks(hideBubble)
         bubble?.visibility = View.GONE
         bubbleActions?.visibility = View.GONE
+        dismissRename()
     }
 
     private fun showBubbleLoading() {
@@ -330,10 +333,7 @@ class OverlayService : LifecycleService() {
         bubbleActions?.visibility = View.VISIBLE
         bubbleRenameBtn?.apply {
             text = "改名"
-            setOnClickListener {
-                launchHome(scriptId)
-                hideBubbleNow()
-            }
+            setOnClickListener { showRenameDialog(scriptId, scriptName) }
         }
         bubbleDeleteBtn?.apply {
             text = "删除"
@@ -344,6 +344,82 @@ class OverlayService : LifecycleService() {
                 hideBubbleNow()
             }
         }
+    }
+
+    private fun showRenameDialog(scriptId: Long, currentName: String) {
+        dismissRename()
+        val ctx = this
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.argb(240, 30, 30, 30))
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+        }
+        val title = TextView(ctx).apply {
+            text = "重命名脚本"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setPadding(0, 0, 0, dp(8))
+        }
+        val edit = EditText(ctx).apply {
+            setText(currentName)
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            textSize = 14f
+            isSingleLine = true
+            setSelection(0, currentName.length)
+            layoutParams = LinearLayout.LayoutParams(
+                dp(220),
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        val btnRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        val btnOk = compactBtn(ctx, "保存") {
+            val newName = edit.text.toString().trim()
+            if (newName.isNotEmpty() && newName != currentName) {
+                lifecycleScope.launch {
+                    val data = App.from(this@OverlayService).scriptRepo.load(scriptId)
+                    if (data != null) {
+                        App.from(this@OverlayService).scriptRepo
+                            .updateScript(data.script.copy(name = newName))
+                        bubbleText?.post { bubbleText?.text = "已保存：$newName" }
+                        bubbleRenameBtn?.setOnClickListener {
+                            showRenameDialog(scriptId, newName)
+                        }
+                    }
+                }
+            }
+            dismissRename()
+        }
+        val btnCancel = compactBtn(ctx, "取消") { dismissRename() }
+        btnRow.addView(btnOk)
+        btnRow.addView(btnCancel)
+        root.addView(title)
+        root.addView(edit)
+        root.addView(btnRow)
+
+        val params = WindowManager.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_DIM_BEHIND,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.CENTER
+            dimAmount = 0.4f
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        }
+        wm.addView(root, params)
+        renameView = root
+        edit.requestFocus()
+    }
+
+    private fun dismissRename() {
+        renameView?.let { runCatching { wm.removeView(it) } }
+        renameView = null
     }
 
     private fun attachDrag(view: View, params: WindowManager.LayoutParams) {
@@ -624,6 +700,7 @@ class OverlayService : LifecycleService() {
         playStopBtn = null
         extraActionsRow = null
         dismissScriptPicker()
+        dismissRename()
     }
 
     companion object {
