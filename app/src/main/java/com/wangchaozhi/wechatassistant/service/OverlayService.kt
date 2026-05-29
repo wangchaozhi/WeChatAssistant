@@ -49,6 +49,9 @@ class OverlayService : LifecycleService() {
     private var scriptPickerView: View? = null
     private var bubble: LinearLayout? = null
     private var bubbleText: TextView? = null
+    private var bubbleActions: LinearLayout? = null
+    private var bubbleRenameBtn: Button? = null
+    private var bubbleDeleteBtn: Button? = null
     private val bubbleHandler = Handler(Looper.getMainLooper())
     private val hideBubble = Runnable { bubble?.visibility = View.GONE }
     private val recordedTouches = mutableListOf<ServiceBus.RawTouch>()
@@ -241,15 +244,41 @@ class OverlayService : LifecycleService() {
             setTextColor(Color.WHITE)
             setPadding(dp(4), dp(2), dp(4), dp(2))
         }
+        val actions = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            visibility = View.GONE
+            setPadding(0, dp(4), 0, 0)
+        }
+        val renameBtn = Button(ctx)
+        val deleteBtn = Button(ctx)
+        val closeBtn = Button(ctx).apply {
+            text = "×"
+            minWidth = dp(44)
+            setOnClickListener { hideBubbleNow() }
+        }
+        actions.addView(renameBtn)
+        actions.addView(deleteBtn)
+        actions.addView(closeBtn)
         outer.addView(status)
+        outer.addView(actions)
         bubble = outer
         bubbleText = status
+        bubbleActions = actions
+        bubbleRenameBtn = renameBtn
+        bubbleDeleteBtn = deleteBtn
         return outer
+    }
+
+    private fun hideBubbleNow() {
+        bubbleHandler.removeCallbacks(hideBubble)
+        bubble?.visibility = View.GONE
+        bubbleActions?.visibility = View.GONE
     }
 
     private fun showBubbleLoading() {
         bubbleHandler.removeCallbacks(hideBubble)
         bubble?.visibility = View.VISIBLE
+        bubbleActions?.visibility = View.GONE
         bubbleText?.setTextColor(Color.WHITE)
         bubbleText?.text = "正在请求 AI…"
     }
@@ -257,6 +286,7 @@ class OverlayService : LifecycleService() {
     private fun renderAiResult(res: ServiceBus.AiResult) {
         bubbleHandler.removeCallbacks(hideBubble)
         bubble?.visibility = View.VISIBLE
+        bubbleActions?.visibility = View.GONE
         when (res) {
             is ServiceBus.AiResult.Success -> {
                 bubbleText?.setTextColor(Color.WHITE)
@@ -268,6 +298,30 @@ class OverlayService : LifecycleService() {
             }
         }
         bubbleHandler.postDelayed(hideBubble, 500)
+    }
+
+    private fun showRecordResult(scriptId: Long, scriptName: String) {
+        bubbleHandler.removeCallbacks(hideBubble)
+        bubble?.visibility = View.VISIBLE
+        bubbleText?.setTextColor(Color.WHITE)
+        bubbleText?.text = "已保存：$scriptName"
+        bubbleActions?.visibility = View.VISIBLE
+        bubbleRenameBtn?.apply {
+            text = "改名"
+            setOnClickListener {
+                launchHome(scriptId)
+                hideBubbleNow()
+            }
+        }
+        bubbleDeleteBtn?.apply {
+            text = "删除"
+            setOnClickListener {
+                lifecycleScope.launch {
+                    App.from(this@OverlayService).scriptRepo.delete(scriptId)
+                }
+                hideBubbleNow()
+            }
+        }
     }
 
     private fun attachDrag(view: View, params: WindowManager.LayoutParams) {
@@ -409,7 +463,8 @@ class OverlayService : LifecycleService() {
         val name = "脚本_" + SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(Date())
         val script = Script(name = name)
         lifecycleScope.launch {
-            App.from(this@OverlayService).scriptRepo.save(script, actions)
+            val id = App.from(this@OverlayService).scriptRepo.save(script, actions)
+            panelView?.post { showRecordResult(id, name) }
         }
     }
 
@@ -524,6 +579,9 @@ class OverlayService : LifecycleService() {
         bubbleHandler.removeCallbacks(hideBubble)
         bubble = null
         bubbleText = null
+        bubbleActions = null
+        bubbleRenameBtn = null
+        bubbleDeleteBtn = null
         playStopBtn = null
         dismissScriptPicker()
     }
