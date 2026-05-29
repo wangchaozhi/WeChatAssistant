@@ -37,7 +37,8 @@ interface ScriptDao {
     suspend fun replaceScript(script: Script, actions: List<Action>): Long {
         val id = insertScript(script)
         deleteActions(id)
-        insertActions(actions.map { it.copy(scriptId = id) })
+        val reindexed = actions.mapIndexed { i, a -> a.copy(id = 0, scriptId = id, index = i) }
+        insertActions(reindexed)
         return id
     }
 }
