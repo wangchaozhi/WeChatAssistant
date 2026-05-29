@@ -53,6 +53,14 @@ class ClickerAccessibilityService : AccessibilityService() {
                 ServiceBus.pasteResult.emit(ok)
             }
         }
+        scope.launch {
+            ServiceBus.enterCmd.collect {
+                val ok = runCatching {
+                    withContext(Dispatchers.Main.immediate) { enterIntoFocused() }
+                }.getOrDefault(false)
+                ServiceBus.enterResult.emit(ok)
+            }
+        }
     }
 
     private fun pasteIntoFocused(): Boolean {

@@ -46,6 +46,7 @@ class OverlayService : LifecycleService() {
     private var recBtn: Button? = null
     private var statusLabel: TextView? = null
     private var playStopBtn: Button? = null
+    private var extraActionsRow: LinearLayout? = null
     private var scriptPickerView: View? = null
     private var bubble: LinearLayout? = null
     private var bubbleText: TextView? = null
@@ -56,6 +57,7 @@ class OverlayService : LifecycleService() {
     private val hideBubble = Runnable { bubble?.visibility = View.GONE }
     private val recordedTouches = mutableListOf<ServiceBus.RawTouch>()
     private val recordedPastes = mutableListOf<Long>()
+    private val recordedEnters = mutableListOf<Long>()
     private val shizukuReader by lazy { ShizukuTouchReader(this) }
 
     override fun onCreate() {
@@ -95,6 +97,14 @@ class OverlayService : LifecycleService() {
                 }
             }
         }
+        lifecycleScope.launch {
+            ServiceBus.enterResult.collect { ok ->
+                val text = if (ok) "已回车" else "回车未生效"
+                panelView?.post {
+                    Toast.makeText(this@OverlayService, text, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     private fun startForegroundCompat() {
@@ -120,6 +130,21 @@ class OverlayService : LifecycleService() {
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics
     ).toInt()
 
+    private fun compactBtn(ctx: Context, label: String, onClick: () -> Unit): Button =
+        Button(ctx).apply {
+            text = label
+            textSize = 14f
+            isAllCaps = false
+            minWidth = 0
+            minHeight = 0
+            minimumWidth = 0
+            minimumHeight = 0
+            includeFontPadding = false
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            stateListAnimator = null
+            setOnClickListener { onClick() }
+        }
+
     private fun showPanel() {
         if (panelView != null) return
         val ctx = this
@@ -135,84 +160,81 @@ class OverlayService : LifecycleService() {
         val label = TextView(ctx).apply {
             text = "连点"
             setTextColor(Color.WHITE)
-            textSize = 13f
-            minWidth = dp(96)
+            textSize = 14f
+            minWidth = dp(84)
             gravity = Gravity.CENTER_VERTICAL
             isSingleLine = true
             setPadding(0, 0, dp(8), 0)
         }
         statusLabel = label
-        val btnRec = Button(ctx).apply {
-            text = "录制"
-            setOnClickListener { toggleRecording(this) }
-        }
+        val btnRec = compactBtn(ctx, "录制") { toggleRecording(recBtn ?: return@compactBtn) }
         recBtn = btnRec
-        val extraActions = LinearLayout(ctx).apply {
+        val btnHome = compactBtn(ctx, "↗") { launchHome(null) }
+        val nodesRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            visibility = View.GONE
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, 0)
         }
-        val btnHome = Button(ctx).apply {
-            text = "↗"
-            minWidth = dp(44)
-            setOnClickListener { launchHome(null) }
+        val nodesLabel = TextView(ctx).apply {
+            text = "节点"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            minWidth = dp(84)
+            gravity = Gravity.CENTER_VERTICAL
+            isSingleLine = true
+            setPadding(0, 0, dp(8), 0)
         }
-        val btnMore = Button(ctx).apply {
-            text = "⋮"
-            minWidth = dp(44)
-            setOnClickListener {
-                val expanded = extraActions.visibility != View.VISIBLE
-                extraActions.visibility = if (expanded) View.VISIBLE else View.GONE
-                text = if (expanded) "×" else "⋮"
-            }
-        }
-        val btnPlayStop = Button(ctx).apply {
-            text = "▶"
-            setOnClickListener {
-                if (ServiceBus.playerState.value is ServiceBus.PlayerState.Playing) {
-                    ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Stop)
-                } else {
-                    if (!ServiceBus.accessibilityReady.value) {
-                        Toast.makeText(ctx, "请先开启「无障碍」服务", Toast.LENGTH_SHORT).show()
-                        return@setOnClickListener
-                    }
-                    lifecycleScope.launch { showScriptPicker(this@apply) }
+        extraActionsRow = nodesRow
+        val btnPlayStop = compactBtn(ctx, "▶") {
+            if (ServiceBus.playerState.value is ServiceBus.PlayerState.Playing) {
+                ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Stop)
+            } else {
+                if (!ServiceBus.accessibilityReady.value) {
+                    Toast.makeText(ctx, "请先开启「无障碍」服务", Toast.LENGTH_SHORT).show()
+                    return@compactBtn
+                }
+                lifecycleScope.launch {
+                    playStopBtn?.let { showScriptPicker(it) }
                 }
             }
         }
         playStopBtn = btnPlayStop
-        val btnAi = Button(ctx).apply {
-            text = "AI"
-            setOnClickListener {
-                if (!ServiceBus.captureReady.value) {
-                    Toast.makeText(ctx, "请先在主界面启动「截图服务」", Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
-                }
-                val prompt = App.from(ctx).settingsRepo.defaultPrompt
-                showBubbleLoading()
-                ServiceBus.lastAiResult.value = null
-                ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.TakeAndAsk(prompt))
+        val btnAi = compactBtn(ctx, "AI") {
+            if (!ServiceBus.captureReady.value) {
+                Toast.makeText(ctx, "请先在主界面启动「截图服务」", Toast.LENGTH_LONG).show()
+                return@compactBtn
             }
+            val prompt = App.from(ctx).settingsRepo.defaultPrompt
+            showBubbleLoading()
+            ServiceBus.lastAiResult.value = null
+            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.TakeAndAsk(prompt))
         }
-        val btnPaste = Button(ctx).apply {
-            text = "粘贴"
-            setOnClickListener {
-                if (recording) recordedPastes += System.currentTimeMillis()
-                if (!ServiceBus.accessibilityReady.value) {
-                    Toast.makeText(ctx, "请先开启「无障碍」服务", Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
-                }
-                ServiceBus.pasteCmd.tryEmit(Unit)
+        val btnPaste = compactBtn(ctx, "粘贴") {
+            if (recording) recordedPastes += System.currentTimeMillis()
+            if (!ServiceBus.accessibilityReady.value) {
+                Toast.makeText(ctx, "请先开启「无障碍」服务", Toast.LENGTH_LONG).show()
+                return@compactBtn
             }
+            ServiceBus.pasteCmd.tryEmit(Unit)
+        }
+        val btnEnter = compactBtn(ctx, "回车") {
+            if (recording) recordedEnters += System.currentTimeMillis()
+            if (!ServiceBus.accessibilityReady.value) {
+                Toast.makeText(ctx, "请先开启「无障碍」服务", Toast.LENGTH_LONG).show()
+                return@compactBtn
+            }
+            ServiceBus.enterCmd.tryEmit(Unit)
         }
         topRow.addView(label)
         topRow.addView(btnRec)
+        topRow.addView(btnPlayStop)
         topRow.addView(btnHome)
-        topRow.addView(btnMore)
-        extraActions.addView(btnPlayStop)
-        extraActions.addView(btnAi)
-        extraActions.addView(btnPaste)
+        nodesRow.addView(nodesLabel)
+        nodesRow.addView(btnAi)
+        nodesRow.addView(btnPaste)
+        nodesRow.addView(btnEnter)
         container.addView(topRow)
-        container.addView(extraActions)
+        container.addView(nodesRow)
         container.addView(buildBubble(ctx))
 
         val params = WindowManager.LayoutParams(
@@ -373,6 +395,7 @@ class OverlayService : LifecycleService() {
             recording = true
             recordedTouches.clear()
             recordedPastes.clear()
+            recordedEnters.clear()
             btn.text = "完成"
             ServiceBus.recordingMode.value = true
             ServiceBus.shizukuRecording.value = true
@@ -417,11 +440,15 @@ class OverlayService : LifecycleService() {
     private fun persistRecording() {
         val touches = recordedTouches.toList()
         val pastes = recordedPastes.toList()
+        val enters = recordedEnters.toList()
         recordedTouches.clear()
         recordedPastes.clear()
-        if (touches.isEmpty() && pastes.isEmpty()) return
+        recordedEnters.clear()
+        if (touches.isEmpty() && pastes.isEmpty() && enters.isEmpty()) return
         val events: List<RecordedEvent> =
-            touches.map { RecordedEvent.Touch(it) } + pastes.map { RecordedEvent.Paste(it) }
+            touches.map { RecordedEvent.Touch(it) } +
+                pastes.map { RecordedEvent.Paste(it) } +
+                enters.map { RecordedEvent.Enter(it) }
         val sorted = events.sortedBy { it.timestamp }
         val firstTs = sorted.first().timestamp
         val actions = sorted.mapIndexed { i, ev ->
@@ -458,6 +485,15 @@ class OverlayService : LifecycleService() {
                     durationMs = 0L,
                     delayBeforeMs = delay,
                 )
+                is RecordedEvent.Enter -> Action(
+                    scriptId = 0,
+                    index = i,
+                    type = ActionType.ENTER,
+                    startX = 0f,
+                    startY = 0f,
+                    durationMs = 0L,
+                    delayBeforeMs = delay,
+                )
             }
         }
         val name = "脚本_" + SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(Date())
@@ -476,6 +512,9 @@ class OverlayService : LifecycleService() {
             override val endTimestamp: Long get() = raw.timestamp + raw.durationMs
         }
         data class Paste(override val timestamp: Long) : RecordedEvent {
+            override val endTimestamp: Long get() = timestamp
+        }
+        data class Enter(override val timestamp: Long) : RecordedEvent {
             override val endTimestamp: Long get() = timestamp
         }
     }
@@ -583,6 +622,7 @@ class OverlayService : LifecycleService() {
         bubbleRenameBtn = null
         bubbleDeleteBtn = null
         playStopBtn = null
+        extraActionsRow = null
         dismissScriptPicker()
     }
 
