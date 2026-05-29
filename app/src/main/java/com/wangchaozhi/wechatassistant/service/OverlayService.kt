@@ -132,6 +132,18 @@ class OverlayService : LifecycleService() {
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics
     ).toInt()
 
+    private fun smallBtn(ctx: Context): Button = Button(ctx).apply {
+        textSize = 12f
+        isAllCaps = false
+        minWidth = 0
+        minHeight = 0
+        minimumWidth = 0
+        minimumHeight = 0
+        includeFontPadding = false
+        setPadding(dp(10), dp(5), dp(10), dp(5))
+        stateListAnimator = null
+    }
+
     private fun compactBtn(ctx: Context, label: String, onClick: () -> Unit): Button =
         Button(ctx).apply {
             text = label
@@ -172,6 +184,7 @@ class OverlayService : LifecycleService() {
         val btnRec = compactBtn(ctx, "录制") { toggleRecording(recBtn ?: return@compactBtn) }
         recBtn = btnRec
         val btnHome = compactBtn(ctx, "↗") { launchHome(null) }
+        val btnClose = compactBtn(ctx, "×") { stopSelf() }
         val nodesRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -231,6 +244,7 @@ class OverlayService : LifecycleService() {
         topRow.addView(btnRec)
         topRow.addView(btnPlayStop)
         topRow.addView(btnHome)
+        topRow.addView(btnClose)
         nodesRow.addView(nodesLabel)
         nodesRow.addView(btnAi)
         nodesRow.addView(btnPaste)
@@ -273,11 +287,10 @@ class OverlayService : LifecycleService() {
             visibility = View.GONE
             setPadding(0, dp(4), 0, 0)
         }
-        val renameBtn = Button(ctx)
-        val deleteBtn = Button(ctx)
-        val closeBtn = Button(ctx).apply {
+        val renameBtn = smallBtn(ctx)
+        val deleteBtn = smallBtn(ctx)
+        val closeBtn = smallBtn(ctx).apply {
             text = "确定"
-            minWidth = dp(44)
             setOnClickListener { hideBubbleNow() }
         }
         actions.addView(renameBtn)
@@ -501,7 +514,7 @@ class OverlayService : LifecycleService() {
     private fun refreshStatus() {
         if (recording) {
             val captured = recordedTouches.size
-            statusLabel?.text = "录制中(Shizuku) · $captured 步"
+            statusLabel?.text = "录制中 · $captured 步"
             return
         }
         val st = ServiceBus.playerState.value
