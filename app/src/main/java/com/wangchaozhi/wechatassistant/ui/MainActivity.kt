@@ -97,6 +97,7 @@ class MainActivity : ComponentActivity() {
                             viewModel = viewModel,
                             onOpenEditor = { id -> viewModel.navigate(Screen.Editor(id)) },
                             onOpenHistory = { viewModel.navigate(Screen.History) },
+                            onOpenSettings = { viewModel.navigate(Screen.Settings) },
                             onRequestNotificationPermission = ::requestNotificationPermission,
                             onRequestOverlayPermission = ::requestOverlayPermission,
                             onRequestAccessibility = ::openAccessibilitySettings,
@@ -114,6 +115,10 @@ class MainActivity : ComponentActivity() {
                             onBack = viewModel::back,
                         )
                         Screen.History -> HistoryScreen(
+                            viewModel = viewModel,
+                            onBack = viewModel::back,
+                        )
+                        Screen.Settings -> SettingsScreen(
                             viewModel = viewModel,
                             onBack = viewModel::back,
                         )
@@ -155,6 +160,7 @@ private fun MainScreen(
     viewModel: MainViewModel,
     onOpenEditor: (Long) -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenSettings: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onRequestOverlayPermission: () -> Unit,
     onRequestAccessibility: () -> Unit,
@@ -179,15 +185,13 @@ private fun MainScreen(
         } else true
     }
 
-    var apiKey by remember { mutableStateOf(viewModel.apiKey) }
-    var prompt by remember { mutableStateOf(viewModel.defaultPrompt) }
-
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("连点助手") },
                 actions = {
                     TextButton(onClick = onOpenHistory) { Text("AI 历史") }
+                    TextButton(onClick = onOpenSettings) { Text("设置") }
                 },
             )
         }
@@ -213,14 +217,6 @@ private fun MainScreen(
                     onStopCapture = onStopCapture,
                     onStartOverlay = onStartOverlay,
                     onStopOverlay = onStopOverlay,
-                )
-            }
-            item {
-                SettingsCard(
-                    apiKey = apiKey,
-                    onApiKey = { apiKey = it; viewModel.apiKey = it },
-                    prompt = prompt,
-                    onPrompt = { prompt = it; viewModel.defaultPrompt = it },
                 )
             }
             item {
@@ -324,35 +320,6 @@ private fun PermRow(
 }
 
 @Composable
-private fun SettingsCard(
-    apiKey: String,
-    onApiKey: (String) -> Unit,
-    prompt: String,
-    onPrompt: (String) -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Text("千问设置", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = onApiKey,
-                label = { Text("DashScope API Key") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = prompt,
-                onValueChange = onPrompt,
-                label = { Text("默认 Prompt") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
-}
-
-@Composable
 private fun PlayerStatusCard(
     state: com.wangchaozhi.wechatassistant.service.ServiceBus.PlayerState,
     lastAnswer: String?,
@@ -412,3 +379,4 @@ private fun ScriptItem(
         }
     }
 }
+

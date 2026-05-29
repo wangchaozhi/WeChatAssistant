@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 
 class ClickerAccessibilityService : AccessibilityService() {
@@ -44,6 +45,7 @@ class ClickerAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
@@ -125,10 +127,16 @@ class ClickerAccessibilityService : AccessibilityService() {
         }
     }
 
-    private suspend fun performGesture(a: Action) {
+    private suspend fun performGesture(a: Action) = withContext(Dispatchers.Main.immediate) {
+        val maxX = resources.displayMetrics.widthPixels.toFloat().coerceAtLeast(1f)
+        val maxY = resources.displayMetrics.heightPixels.toFloat().coerceAtLeast(1f)
+        val startX = a.startX.coerceIn(0f, maxX - 1f)
+        val startY = a.startY.coerceIn(0f, maxY - 1f)
+        val endX = a.endX.coerceIn(0f, maxX - 1f)
+        val endY = a.endY.coerceIn(0f, maxY - 1f)
         val path = Path().apply {
-            moveTo(a.startX, a.startY)
-            if (a.type == ActionType.SWIPE) lineTo(a.endX, a.endY)
+            moveTo(startX, startY)
+            if (a.type == ActionType.SWIPE) lineTo(endX, endY)
         }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0L, a.durationMs.coerceAtLeast(1)))

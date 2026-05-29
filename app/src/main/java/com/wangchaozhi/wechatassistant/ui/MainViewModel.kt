@@ -10,6 +10,7 @@ import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.data.repo.ScriptRepository
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.service.ServiceBus
+import com.wangchaozhi.wechatassistant.util.ShizukuManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +22,7 @@ sealed interface Screen {
     data object Home : Screen
     data class Editor(val scriptId: Long) : Screen
     data object History : Screen
+    data object Settings : Screen
 }
 
 class MainViewModel(
@@ -54,6 +56,14 @@ class MainViewModel(
     var defaultPrompt: String
         get() = settings.defaultPrompt
         set(value) { settings.defaultPrompt = value }
+
+    val shizukuState: StateFlow<ShizukuManager.Status> = ShizukuManager.state
+
+    fun requestShizukuPermission() {
+        viewModelScope.launch { ShizukuManager.requestPermission() }
+    }
+
+    fun refreshShizuku() { ShizukuManager.refresh() }
 
     fun play(scriptId: Long) {
         viewModelScope.launch { ServiceBus.playerCmd.emit(ServiceBus.PlayerCmd.Play(scriptId)) }

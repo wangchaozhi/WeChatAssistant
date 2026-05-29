@@ -8,7 +8,6 @@ import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
-import android.os.SystemClock
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -18,6 +17,9 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import kotlin.math.abs
+import kotlin.math.hypot
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -27,19 +29,22 @@ import com.wangchaozhi.wechatassistant.data.model.Action
 import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.ui.MainActivity
+import com.wangchaozhi.wechatassistant.util.ShizukuManager
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.hypot
 
 class OverlayService : LifecycleService() {
 
     private lateinit var wm: WindowManager
     private var panelView: View? = null
-    private var captureView: View? = null
     private var recording = false
+    private var recBtn: Button? = null
+    private var statusLabel: TextView? = null
     private val recordedTouches = mutableListOf<ServiceBus.RawTouch>()
+    private val shizukuReader by lazy { ShizukuTouchReader(this) }
 
     override fun onCreate() {
         super.onCreate()
@@ -47,6 +52,17 @@ class OverlayService : LifecycleService() {
         startForegroundCompat()
         showPanel()
         ServiceBus.overlayReady.value = true
+        lifecycleScope.launch {
+            ServiceBus.recordedTap.collect { tap ->
+                if (recording && acceptTap(tap)) {
+                    recordedTouches += tap
+                    refreshStatus()
+                }
+            }
+        }
+        lifecycleScope.launch {
+            ServiceBus.playerState.collect { refreshStatus() }
+        }
     }
 
     private fun startForegroundCompat() {
@@ -83,11 +99,21 @@ class OverlayService : LifecycleService() {
         val label = TextView(ctx).apply {
             text = "连点"
             setTextColor(Color.WHITE)
+            textSize = 13f
+            minWidth = dp(140)
+            gravity = Gravity.CENTER_VERTICAL
+            isSingleLine = true
             setPadding(0, 0, dp(8), 0)
         }
+        statusLabel = label
         val btnRec = Button(ctx).apply {
             text = "录制"
             setOnClickListener { toggleRecording(this) }
+        }
+        recBtn = btnRec
+        val btnPlay = Button(ctx).apply {
+            text = "▶"
+            setOnClickListener { playMostRecent() }
         }
         val btnAi = Button(ctx).apply {
             text = "AI"
@@ -98,10 +124,17 @@ class OverlayService : LifecycleService() {
         }
         val btnStop = Button(ctx).apply {
             text = "停止"
-            setOnClickListener { ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Stop) }
+            setOnClickListener {
+                if (ServiceBus.playerState.value !is ServiceBus.PlayerState.Playing) {
+                    Toast.makeText(ctx, "当前没有正在播放的脚本", Toast.LENGTH_SHORT).show()
+                } else {
+                    ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Stop)
+                }
+            }
         }
         container.addView(label)
         container.addView(btnRec)
+        container.addView(btnPlay)
         container.addView(btnAi)
         container.addView(btnStop)
 
@@ -109,7 +142,9 @@ class OverlayService : LifecycleService() {
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
             overlayType(),
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -126,6 +161,9 @@ class OverlayService : LifecycleService() {
         var downRawX = 0f; var downRawY = 0f
         view.setOnTouchListener { _, e ->
             when (e.action) {
+                MotionEvent.ACTION_OUTSIDE -> {
+                    false
+                }
                 MotionEvent.ACTION_DOWN -> {
                     startX = params.x; startY = params.y
                     downRawX = e.rawX; downRawY = e.rawY
@@ -142,24 +180,73 @@ class OverlayService : LifecycleService() {
         }
     }
 
+    private fun acceptTap(tap: ServiceBus.RawTouch): Boolean {
+        val last = recordedTouches.lastOrNull() ?: return true
+        val dt = tap.timestamp - last.timestamp
+        if (dt !in 0..150) return true
+        val dx = abs(tap.startX - last.startX)
+        val dy = abs(tap.startY - last.startY)
+        if (dx > 24f || dy > 24f) return true
+        return tap.source == last.source
+    }
+
     private fun toggleRecording(btn: Button) {
         if (!recording) {
+            ShizukuManager.refresh()
+            val shizuku = ShizukuManager.state.value
+            if (!shizuku.available) {
+                Toast.makeText(this, "请先启动 Shizuku 后再录制", Toast.LENGTH_SHORT).show()
+                return
+            }
+            if (!shizuku.granted) {
+                Toast.makeText(this, "请先在设置中授权 Shizuku", Toast.LENGTH_SHORT).show()
+                return
+            }
             recording = true
             recordedTouches.clear()
             btn.text = "完成"
-            showCaptureLayer()
+            ServiceBus.recordingMode.value = true
+            ServiceBus.shizukuRecording.value = true
+            shizukuReader.start(lifecycleScope) { message ->
+                if (recording && recordedTouches.isEmpty()) {
+                    recording = false
+                    btn.text = "录制"
+                    ServiceBus.recordingMode.value = false
+                    ServiceBus.shizukuRecording.value = false
+                    refreshStatus()
+                }
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            }
             ServiceBus.overlayCmd.tryEmit(ServiceBus.OverlayCmd.StartRecording)
         } else {
             recording = false
             btn.text = "录制"
-            hideCaptureLayer()
+            ServiceBus.recordingMode.value = false
+            ServiceBus.shizukuRecording.value = false
+            shizukuReader.stop()
             ServiceBus.overlayCmd.tryEmit(ServiceBus.OverlayCmd.StopRecording)
             persistRecording()
+        }
+        refreshStatus()
+    }
+
+    private fun refreshStatus() {
+        if (recording) {
+            val captured = recordedTouches.size
+            statusLabel?.text = "录制中(Shizuku) · $captured 步"
+            return
+        }
+        val st = ServiceBus.playerState.value
+        statusLabel?.text = when (st) {
+            is ServiceBus.PlayerState.Playing ->
+                "播放中 · ${st.stepIndex + 1}/${st.totalSteps}"
+            ServiceBus.PlayerState.Idle -> "连点"
         }
     }
 
     private fun persistRecording() {
-        val touches = recordedTouches.toList()
+        val touches = recordedTouches.toList().sortedBy { it.timestamp }
+        recordedTouches.clear()
         if (touches.isEmpty()) return
         val first = touches.first().timestamp
         val actions = touches.mapIndexed { i, t ->
@@ -190,37 +277,29 @@ class OverlayService : LifecycleService() {
         }
     }
 
-    private fun showCaptureLayer() {
-        if (captureView != null) return
-        val view = RecordingView(this) { raw ->
-            recordedTouches += raw
-            ServiceBus.overlayCmd.tryEmit(ServiceBus.OverlayCmd.RecordedAction(raw))
+    private fun playMostRecent() {
+        if (!ServiceBus.accessibilityReady.value) {
+            Toast.makeText(this, "请先开启「无障碍」服务", Toast.LENGTH_SHORT).show()
+            return
         }
-        val lp = WindowManager.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            overlayType(),
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
+        if (ServiceBus.playerState.value is ServiceBus.PlayerState.Playing) {
+            Toast.makeText(this, "正在播放中，先停止", Toast.LENGTH_SHORT).show()
+            return
         }
-        wm.addView(view, lp)
-        captureView = view
-        bringPanelToFront()
-    }
-
-    private fun bringPanelToFront() {
-        val v = panelView ?: return
-        val lp = v.layoutParams as? WindowManager.LayoutParams ?: return
-        wm.removeView(v)
-        wm.addView(v, lp)
-    }
-
-    private fun hideCaptureLayer() {
-        captureView?.let { wm.removeView(it) }
-        captureView = null
+        lifecycleScope.launch {
+            val list = App.from(this@OverlayService).scriptRepo.observeScripts().first()
+            val latest = list.firstOrNull()
+            if (latest == null) {
+                Toast.makeText(this@OverlayService, "还没有脚本", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val data = App.from(this@OverlayService).scriptRepo.load(latest.id)
+            if (data == null || data.actions.isEmpty()) {
+                Toast.makeText(this@OverlayService, "脚本「${latest.name}」没有动作", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            ServiceBus.playerCmd.emit(ServiceBus.PlayerCmd.Play(latest.id))
+        }
     }
 
     private fun overlayType(): Int =
@@ -232,10 +311,13 @@ class OverlayService : LifecycleService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        shizukuReader.stop()
         ServiceBus.overlayReady.value = false
-        captureView?.let { wm.removeView(it) }
-        panelView?.let { wm.removeView(it) }
-        captureView = null; panelView = null
+        ServiceBus.recordingMode.value = false
+        panelView?.let { runCatching { wm.removeView(it) } }
+        panelView = null
+        recBtn = null
+        statusLabel = null
     }
 
     companion object {
@@ -246,44 +328,5 @@ class OverlayService : LifecycleService() {
         fun stop(ctx: Context) {
             ctx.stopService(Intent(ctx, OverlayService::class.java))
         }
-    }
-}
-
-private class RecordingView(
-    context: Context,
-    private val onTouch: (ServiceBus.RawTouch) -> Unit,
-) : View(context) {
-
-    private var downAt: Long = 0
-    private var downX = 0f
-    private var downY = 0f
-
-    init {
-        setBackgroundColor(Color.argb(40, 0, 150, 255))
-    }
-
-    @Suppress("ClickableViewAccessibility")
-    override fun onTouchEvent(e: MotionEvent): Boolean {
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                downAt = SystemClock.uptimeMillis()
-                downX = e.rawX; downY = e.rawY
-            }
-            MotionEvent.ACTION_UP -> {
-                val now = SystemClock.uptimeMillis()
-                val dur = now - downAt
-                val dx = e.rawX - downX; val dy = e.rawY - downY
-                if (hypot(dx, dy) < 5 && dur < 60) return true
-                onTouch(
-                    ServiceBus.RawTouch(
-                        startX = downX, startY = downY,
-                        endX = e.rawX, endY = e.rawY,
-                        durationMs = dur.coerceAtLeast(50),
-                        timestamp = downAt,
-                    )
-                )
-            }
-        }
-        return true
     }
 }

@@ -36,6 +36,14 @@ object ServiceBus {
 
     val overlayCmd = MutableSharedFlow<OverlayCmd>(extraBufferCapacity = 16)
 
+    val recordingMode = MutableStateFlow(false)
+    val shizukuRecording = MutableStateFlow(false)
+    val recordedTap = MutableSharedFlow<RawTouch>(extraBufferCapacity = 64)
+
+    enum class RawTouchSource {
+        SHIZUKU,
+    }
+
     data class RawTouch(
         val startX: Float,
         val startY: Float,
@@ -43,6 +51,7 @@ object ServiceBus {
         val endY: Float,
         val durationMs: Long,
         val timestamp: Long,
+        val source: RawTouchSource,
     )
 
     val playerState = MutableStateFlow<PlayerState>(PlayerState.Idle)

@@ -11,6 +11,7 @@ import com.wangchaozhi.wechatassistant.data.repo.ScriptRepository
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiTapUseCase
 import com.wangchaozhi.wechatassistant.feature.ai.ScreenshotAiUseCase
+import com.wangchaozhi.wechatassistant.util.ShizukuManager
 import com.wangchaozhi.wechatassistant.feature.qwen.QwenRepository
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -55,6 +56,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         registerNotificationChannels()
+        runCatching { ShizukuManager.install() }
     }
 
     private fun registerNotificationChannels() {

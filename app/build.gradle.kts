@@ -85,6 +85,9 @@ dependencies {
 
     implementation(libs.androidx.security.crypto)
 
+    implementation(libs.shizuku.api)
+    implementation(libs.shizuku.provider)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
