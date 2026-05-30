@@ -153,7 +153,7 @@ class MainActivity : ComponentActivity() {
                             },
                             onStopOverlay = { OverlayService.stop(this) },
                         )
-                        is Screen.Editor -> ScriptEditorScreen(
+                        is Screen.Editor -> GraphEditorScreen(
                             scriptId = s.scriptId,
                             viewModel = viewModel,
                             onBack = viewModel::back,

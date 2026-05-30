@@ -263,7 +263,7 @@ fun ScriptEditorScreen(
     }
 }
 
-private fun decodeBitmap(context: android.content.Context, uri: android.net.Uri): android.graphics.Bitmap? =
+internal fun decodeBitmap(context: android.content.Context, uri: android.net.Uri): android.graphics.Bitmap? =
     runCatching {
         context.contentResolver.openInputStream(uri)?.use {
             android.graphics.BitmapFactory.decodeStream(it)
@@ -419,6 +419,10 @@ private fun AddActionMenu(
                 onClick = { onAddSimple(ActionType.ENTER); expanded = false },
             )
             DropdownMenuItem(
+                text = { Text("等待页面变化") },
+                onClick = { onAddSimple(ActionType.WAIT_PAGE_CHANGE); expanded = false },
+            )
+            DropdownMenuItem(
                 text = { Text("AI 步骤…") },
                 onClick = { onAddAi(); expanded = false },
             )
@@ -430,7 +434,7 @@ private fun AddActionMenu(
     }
 }
 
-private fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Action = when (type) {
+internal fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Action = when (type) {
     ActionType.TAP -> Action(
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 80L,
@@ -455,9 +459,21 @@ private fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Acti
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 0L,
     )
+    ActionType.WAIT_PAGE_CHANGE -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 800L, retryCount = 10,
+    )
+    ActionType.START -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L,
+    )
+    ActionType.SNAPSHOT, ActionType.IF_PAGE_CHANGED -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L, aiPrompt = "快照1",
+    )
 }
 
-private fun typeLabel(t: ActionType): String = when (t) {
+internal fun typeLabel(t: ActionType): String = when (t) {
     ActionType.TAP -> "点击"
     ActionType.SWIPE -> "滑动"
     ActionType.LONG_PRESS -> "长按"
@@ -467,6 +483,10 @@ private fun typeLabel(t: ActionType): String = when (t) {
     ActionType.IMAGE_MATCH -> "找图点击（模板）"
     ActionType.PASTE -> "粘贴"
     ActionType.ENTER -> "回车"
+    ActionType.WAIT_PAGE_CHANGE -> "等待页面变化"
+    ActionType.START -> "开始"
+    ActionType.SNAPSHOT -> "快照"
+    ActionType.IF_PAGE_CHANGED -> "条件：页面是否变化"
 }
 
 private fun describe(a: Action): String = when (a.type) {
@@ -481,6 +501,11 @@ private fun describe(a: Action): String = when (a.type) {
         "${if (a.templatePath != null) "找图点击" else "⚠ 未设模板"} · 阈值 ${"%.2f".format(a.matchThreshold)} · 延迟 ${a.delayBeforeMs}ms"
     ActionType.PASTE -> "粘贴到当前焦点输入框 · 延迟 ${a.delayBeforeMs}ms"
     ActionType.ENTER -> "回车 (IME action 或换行) · 延迟 ${a.delayBeforeMs}ms"
+    ActionType.WAIT_PAGE_CHANGE ->
+        "页面没变就重复前 ${a.repeatPrevSteps} 步 · 最多 ${a.retryCount} 次 · 间隔 ${a.durationMs}ms"
+    ActionType.START -> "图入口"
+    ActionType.SNAPSHOT -> "记录当前页面为基准"
+    ActionType.IF_PAGE_CHANGED -> "页面变了走「是」，否则走「否」"
 }
 
 @Composable
@@ -538,7 +563,7 @@ private fun AddAiStepDialog(
 }
 
 @Composable
-private fun EditActionDialog(
+internal fun EditActionDialog(
     action: Action,
     onDismiss: () -> Unit,
     onConfirm: (Action) -> Unit,
@@ -552,6 +577,8 @@ private fun EditActionDialog(
     var delay by remember { mutableStateOf(action.delayBeforeMs.toString()) }
     var aiPrompt by remember { mutableStateOf(action.aiPrompt.orEmpty()) }
     var threshold by remember { mutableStateOf(action.matchThreshold.toString()) }
+    var retry by remember { mutableStateOf(action.retryCount.toString()) }
+    var repeatSteps by remember { mutableStateOf(action.repeatPrevSteps.toString()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -579,18 +606,29 @@ private fun EditActionDialog(
                         }
                     }
                     ActionType.WAIT, ActionType.SCREENSHOT_AI, ActionType.AI_TAP,
-                    ActionType.IMAGE_MATCH, ActionType.PASTE, ActionType.ENTER -> { /* no coords */ }
+                    ActionType.IMAGE_MATCH, ActionType.PASTE, ActionType.ENTER,
+                    ActionType.WAIT_PAGE_CHANGE,
+                    ActionType.START, ActionType.SNAPSHOT, ActionType.IF_PAGE_CHANGED -> { /* no coords */ }
                 }
-                Spacer(Modifier.height(6.dp))
-                if (action.type != ActionType.SCREENSHOT_AI &&
-                    action.type != ActionType.IMAGE_MATCH &&
-                    action.type != ActionType.PASTE &&
-                    action.type != ActionType.ENTER
-                ) {
-                    NumField(duration, { duration = it }, "持续 (ms)", Modifier.fillMaxWidth())
+                if (action.type == ActionType.WAIT_PAGE_CHANGE) {
+                    Spacer(Modifier.height(6.dp))
+                    NumField(repeatSteps, { repeatSteps = it }, "每次重复执行的前几步 (如出去+进来=2)", Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    NumField(retry, { retry = it }, "页面未变最多重试次数", Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    NumField(duration, { duration = it }, "轮询间隔 (ms)", Modifier.fillMaxWidth())
+                } else {
+                    Spacer(Modifier.height(6.dp))
+                    if (action.type != ActionType.SCREENSHOT_AI &&
+                        action.type != ActionType.IMAGE_MATCH &&
+                        action.type != ActionType.PASTE &&
+                        action.type != ActionType.ENTER
+                    ) {
+                        NumField(duration, { duration = it }, "持续 (ms)", Modifier.fillMaxWidth())
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    NumField(delay, { delay = it }, "执行前等待 (ms)", Modifier.fillMaxWidth())
                 }
-                Spacer(Modifier.height(6.dp))
-                NumField(delay, { delay = it }, "执行前等待 (ms)", Modifier.fillMaxWidth())
                 if (action.type == ActionType.SCREENSHOT_AI || action.type == ActionType.AI_TAP) {
                     Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
@@ -599,6 +637,26 @@ private fun EditActionDialog(
                         label = {
                             Text(if (action.type == ActionType.AI_TAP) "目标描述" else "Prompt")
                         },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (action.type == ActionType.SNAPSHOT) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = aiPrompt,
+                        onValueChange = { aiPrompt = it },
+                        label = { Text("快照名称（条件节点按此名称对比）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (action.type == ActionType.IF_PAGE_CHANGED) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = aiPrompt,
+                        onValueChange = { aiPrompt = it },
+                        label = { Text("对比哪个快照（填快照名称）") },
+                        singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -634,6 +692,9 @@ private fun EditActionDialog(
                         aiPrompt = aiPrompt.ifBlank { null },
                         matchThreshold = threshold.toFloatOrNull()?.coerceIn(0.1f, 1f)
                             ?: action.matchThreshold,
+                        retryCount = retry.toIntOrNull()?.coerceAtLeast(0) ?: action.retryCount,
+                        repeatPrevSteps = repeatSteps.toIntOrNull()?.coerceAtLeast(1)
+                            ?: action.repeatPrevSteps,
                     )
                 )
             }) { Text("保存") }

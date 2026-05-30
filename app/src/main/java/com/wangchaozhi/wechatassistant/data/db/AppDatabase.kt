@@ -7,6 +7,7 @@ import androidx.room.TypeConverters
 import com.wangchaozhi.wechatassistant.data.model.Action
 import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.AiAnswer
+import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
 
 class Converters {
@@ -15,8 +16,8 @@ class Converters {
 }
 
 @Database(
-    entities = [Script::class, Action::class, AiAnswer::class],
-    version = 3,
+    entities = [Script::class, Action::class, AiAnswer::class, Edge::class],
+    version = 5,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)

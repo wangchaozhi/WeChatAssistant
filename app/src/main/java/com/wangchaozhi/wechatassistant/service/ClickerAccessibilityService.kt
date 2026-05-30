@@ -13,7 +13,7 @@ import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.data.model.Action
 import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Script
-import com.wangchaozhi.wechatassistant.data.model.ScriptWithActions
+import com.wangchaozhi.wechatassistant.data.model.ScriptWithGraph
 import com.wangchaozhi.wechatassistant.feature.ai.AiTapUseCase
 import com.wangchaozhi.wechatassistant.feature.ai.ScreenshotAiUseCase
 import kotlinx.coroutines.CoroutineScope
@@ -33,6 +33,11 @@ class ClickerAccessibilityService : AccessibilityService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var playJob: Job? = null
+
+    private companion object {
+        // 图遍历硬上限，防止无条件节点把关的环导致死循环。
+        const val MAX_GRAPH_STEPS = 100_000
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -94,9 +99,9 @@ class ClickerAccessibilityService : AccessibilityService() {
         playJob?.cancel()
         playJob = scope.launch {
             val app = App.from(this@ClickerAccessibilityService)
-            val data = app.scriptRepo.load(scriptId) ?: return@launch
+            val data = app.scriptRepo.loadGraph(scriptId) ?: return@launch
             try {
-                runScript(data, app.screenshotAi, app.aiTap, scriptId)
+                runGraph(data, app.screenshotAi, app.aiTap, scriptId)
             } finally {
                 ServiceBus.playerState.value = ServiceBus.PlayerState.Idle
             }
@@ -109,27 +114,99 @@ class ClickerAccessibilityService : AccessibilityService() {
         ServiceBus.playerState.value = ServiceBus.PlayerState.Idle
     }
 
-    private suspend fun runScript(
-        data: ScriptWithActions,
+    /**
+     * 从 START 节点出发，沿边深度优先遍历执行图：
+     * - SNAPSHOT 节点把当前页面指纹存入以「名称」(aiPrompt) 为键的具名寄存器；
+     * - IF_PAGE_CHANGED 节点把当前指纹与「指定名称」的快照瞬时比较，变了走出口 0、没变走出口 1；
+     *   指定的快照若尚未拍过，视为「没变」走出口 1；
+     * - 其它节点执行后走出口 0。
+     * 一个出口可连多条边：按连线顺序依次深度优先执行（先把第一条分支整支跑完，再下一条）。
+     * 循环由回指的边表达；用显式栈而非递归避免爆栈。MAX_GRAPH_STEPS 防无闸死循环。
+     */
+    private suspend fun runGraph(
+        data: ScriptWithGraph,
         ai: ScreenshotAiUseCase,
         tap: AiTapUseCase,
         scriptId: Long,
     ) {
         val script = data.script
-        val actions = data.actions.sortedBy { it.index }
-        if (actions.isEmpty()) return
-        val loops = if (script.loopCount <= 0) Int.MAX_VALUE else script.loopCount
-        repeat(loops) { _ ->
-            if (!scope.isActive) return
-            actions.forEachIndexed { i, action ->
-                ServiceBus.playerState.value =
-                    ServiceBus.PlayerState.Playing(script, i, actions.size)
-                if (action.delayBeforeMs > 0) {
-                    delay((action.delayBeforeMs / script.speed).toLong().coerceAtLeast(0))
-                }
-                execute(action, ai, tap, scriptId)
+        val nodes = data.actions.associateBy { it.id }
+        if (nodes.isEmpty()) return
+        // fromId -> (port -> [toId...])，保留连线顺序，按缺失节点过滤悬空边。
+        val out = HashMap<Long, HashMap<Int, MutableList<Long>>>()
+        data.edges.forEach { e ->
+            if (nodes.containsKey(e.fromActionId) && nodes.containsKey(e.toActionId)) {
+                out.getOrPut(e.fromActionId) { HashMap() }
+                    .getOrPut(e.fromPort) { ArrayList() }
+                    .add(e.toActionId)
             }
         }
+        val startId = data.actions.firstOrNull { it.type == ActionType.START }?.id
+            ?: data.actions.first().id
+        val baselines = HashMap<String, Int>()   // 快照名称 -> 指纹
+        val stack = ArrayDeque<Long>()
+        stack.addLast(startId)
+        var visited = 0
+        var steps = 0
+        while (scope.isActive && stack.isNotEmpty()) {
+            val current = stack.removeLast()
+            val node = nodes[current] ?: continue
+            ServiceBus.playerState.value =
+                ServiceBus.PlayerState.Playing(script, visited++, nodes.size)
+            val port = when (node.type) {
+                ActionType.START -> 0
+                ActionType.SNAPSHOT -> {
+                    val key = node.aiPrompt?.ifBlank { null } ?: "默认"
+                    val fp = pageFingerprint()
+                    baselines[key] = fp
+                    App.from(this@ClickerAccessibilityService).appendLog("SNAPSHOT[$key]=$fp")
+                    0
+                }
+                ActionType.IF_PAGE_CHANGED -> {
+                    val key = node.aiPrompt?.ifBlank { null } ?: "默认"
+                    val base = baselines[key]
+                    val now = pageFingerprint()
+                    val changed = base != null && now != base
+                    App.from(this@ClickerAccessibilityService)
+                        .appendLog("IF vs 快照[$key] changed=$changed (now=$now base=$base)")
+                    if (changed) 0 else 1
+                }
+                else -> {
+                    if (node.delayBeforeMs > 0) {
+                        delay((node.delayBeforeMs / script.speed).toLong().coerceAtLeast(0))
+                    }
+                    execute(node, ai, tap, scriptId)
+                    0
+                }
+            }
+            // 深度优先：第一条连线最先处理 => 反序压栈。
+            val targets = out[current]?.get(port).orEmpty()
+            for (i in targets.indices.reversed()) stack.addLast(targets[i])
+            if (++steps > MAX_GRAPH_STEPS) {
+                App.from(this@ClickerAccessibilityService).appendLog("runGraph: 步数超上限，停止")
+                break
+            }
+        }
+    }
+
+    /** 当前活动窗口可见节点的指纹：拼接 text/className/bounds 后取 hash。 */
+    private suspend fun pageFingerprint(): Int = withContext(Dispatchers.Main.immediate) {
+        val root = rootInActiveWindow ?: return@withContext 0
+        val sb = StringBuilder()
+        val rect = android.graphics.Rect()
+        fun walk(node: AccessibilityNodeInfo?) {
+            if (node == null) return
+            if (node.isVisibleToUser) {
+                node.getBoundsInScreen(rect)
+                sb.append(node.className).append('|')
+                    .append(node.text ?: "").append('|')
+                    .append(rect.left).append(',').append(rect.top).append(',')
+                    .append(rect.right).append(',').append(rect.bottom).append(';')
+            }
+            for (i in 0 until node.childCount) walk(node.getChild(i))
+        }
+        walk(root)
+        sb.toString().hashCode()
     }
 
     private suspend fun execute(
@@ -187,6 +264,11 @@ class ClickerAccessibilityService : AccessibilityService() {
             ActionType.ENTER -> {
                 withContext(Dispatchers.Main.immediate) { enterIntoFocused() }
             }
+            // 控制流节点，由 runScript / runGraph 直接处理；正常不会走到这里。
+            ActionType.WAIT_PAGE_CHANGE,
+            ActionType.START,
+            ActionType.SNAPSHOT,
+            ActionType.IF_PAGE_CHANGED -> Unit
         }
     }
 

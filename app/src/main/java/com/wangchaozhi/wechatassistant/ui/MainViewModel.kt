@@ -4,7 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.wangchaozhi.wechatassistant.App
+import com.wangchaozhi.wechatassistant.data.model.Action
+import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.AiAnswer
+import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.data.repo.ScriptRepository
@@ -95,20 +98,39 @@ class MainViewModel(
     fun createEmptyScript(onCreated: (Long) -> Unit) {
         viewModelScope.launch {
             val name = "脚本_" + SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(Date())
-            val id = scriptRepo.save(Script(name = name), emptyList())
+            // 新脚本种一个 START 节点作为图入口。
+            val start = Action(
+                id = -1L, scriptId = 0, index = 0, type = ActionType.START,
+                startX = 0f, startY = 0f, posX = 120f, posY = 120f,
+            )
+            val id = scriptRepo.saveGraph(Script(name = name), listOf(start), emptyList())
             onCreated(id)
         }
     }
 
     suspend fun loadScript(id: Long) = scriptRepo.load(id)
 
+    suspend fun loadGraphScript(id: Long) = scriptRepo.loadGraph(id)
+
     fun saveScript(
         script: Script,
-        actions: List<com.wangchaozhi.wechatassistant.data.model.Action>,
+        actions: List<Action>,
         onSaved: (Long) -> Unit = {},
     ) {
         viewModelScope.launch {
             val id = scriptRepo.save(script, actions)
+            onSaved(id)
+        }
+    }
+
+    fun saveGraph(
+        script: Script,
+        nodes: List<Action>,
+        edges: List<Edge>,
+        onSaved: (Long) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            val id = scriptRepo.saveGraph(script, nodes, edges)
             onSaved(id)
         }
     }

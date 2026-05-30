@@ -33,6 +33,7 @@ import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.R
 import com.wangchaozhi.wechatassistant.data.model.Action
 import com.wangchaozhi.wechatassistant.data.model.ActionType
+import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.ui.MainActivity
 import com.wangchaozhi.wechatassistant.util.ShizukuManager
@@ -848,10 +849,23 @@ class OverlayService : LifecycleService() {
                 )
             }
         }
+        // 转成节点图：录制的动作向下排成一列，前置 START，连成一条直链。
+        // 临时 id 用负数（START=-1，其余 -(i+2)），saveGraph 会按位置映射成真实 id 并重写边。
+        val positioned = actions.mapIndexed { i, a ->
+            a.copy(id = -(i + 2L), posX = 120f, posY = 200f + i * 220f)
+        }
+        val start = Action(
+            id = -1L, scriptId = 0, index = 0, type = ActionType.START,
+            startX = 0f, startY = 0f, posX = 120f, posY = 40f,
+        )
+        val chain = listOf(start) + positioned
+        val edges = chain.zipWithNext { a, b ->
+            Edge(scriptId = 0, fromActionId = a.id, toActionId = b.id, fromPort = 0)
+        }
         val name = "脚本_" + SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(Date())
         val script = Script(name = name)
         lifecycleScope.launch {
-            val id = App.from(this@OverlayService).scriptRepo.save(script, actions)
+            val id = App.from(this@OverlayService).scriptRepo.saveGraph(script, chain, edges)
             panelView?.post { showRecordResult(id, name) }
         }
     }
