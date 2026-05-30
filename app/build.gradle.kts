@@ -32,8 +32,9 @@ android {
 
         buildConfigField("String", "QWEN_API_KEY", "\"$qwenApiKey\"")
 
-        // OpenCV 自带各 ABI 的 native 库，体积较大。只保留真机与模拟器常用的两个 ABI。
-        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        // OpenCV 自带各 ABI 的 native 库，体积较大（x86_64 的 .so 就 ~53MB）。
+        // 只保留真机用的 arm64-v8a；如需 x86_64 模拟器调试再临时加回。
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     buildTypes {

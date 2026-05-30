@@ -34,21 +34,29 @@ class AiTapUseCase(
         runCatching { history.save(bitmap, prompt, raw, scriptId) }
 
         val point = parseCoords(raw, bitmap.width, bitmap.height)
-            ?: return Result.failure(IllegalStateException("未能从回答中解析坐标：${raw.take(120)}"))
+        App.from(context).appendLog(
+            "AITAP w=${bitmap.width} h=${bitmap.height} point=$point raw=${raw.replace("\n", " ").take(180)}"
+        )
+        if (point == null) {
+            return Result.failure(IllegalStateException("未能从回答中解析坐标：${raw.take(120)}"))
+        }
         return Result.success(point)
     }
 
     private fun buildPrompt(target: String, w: Int, h: Int): String = """
-        屏幕分辨率是 ${w}x${h} 像素。请你找到屏幕上的以下元素：$target
-        只返回一个 JSON，不要任何其它说明，格式：{"x": <像素 x>, "y": <像素 y>}
-        坐标是该元素中心点的绝对像素值，左上角为 (0,0)。
+        屏幕分辨率是 ${w}x${h} 像素，左上角为 (0,0)。请找到屏幕上的元素：$target
+        只返回一行 JSON：{"x": 整数, "y": 整数}
+        x、y 是该元素中心点的绝对像素值，必须是单个整数，不要返回数组、范围或边界框，不要任何解释。
     """.trimIndent()
 
     private fun parseCoords(raw: String, w: Int, h: Int): PointF? {
-        val xMatch = X_REGEX.find(raw) ?: return null
-        val yMatch = Y_REGEX.find(raw) ?: return null
-        var x = xMatch.groupValues[1].toFloatOrNull() ?: return null
-        var y = yMatch.groupValues[1].toFloatOrNull() ?: return null
+        // 模型常把坐标返回成数组/边界框（如 "x":[a,b]）。把每个轴上的所有数字求平均，
+        // 单点取其本身、边界框取中心，都是要点击的位置。
+        val xs = valuesFor(raw, "x")
+        val ys = valuesFor(raw, "y")
+        if (xs.isEmpty() || ys.isEmpty()) return null
+        var x = xs.average().toFloat()
+        var y = ys.average().toFloat()
 
         // 兼容归一化（0-1 或 0-1000）坐标
         if (x <= 1f && y <= 1f) { x *= w; y *= h }
@@ -61,8 +69,14 @@ class AiTapUseCase(
         return PointF(x, y)
     }
 
+    /** 取某个轴(key)后面跟着的所有数字：兼容 `"x": 840`、`"x":[840,120]`、`"x": 840, 120` 等。 */
+    private fun valuesFor(raw: String, key: String): List<Float> {
+        val seg = Regex("""["']?$key["']?\s*[:=]\s*(\[[^\]]*]|[-0-9.,\s]+)""", RegexOption.IGNORE_CASE)
+            .find(raw)?.groupValues?.get(1) ?: return emptyList()
+        return NUM_REGEX.findAll(seg).mapNotNull { it.value.toFloatOrNull() }.toList()
+    }
+
     companion object {
-        private val X_REGEX = Regex("""["']?x["']?\s*[:=]\s*([0-9]+\.?[0-9]*)""", RegexOption.IGNORE_CASE)
-        private val Y_REGEX = Regex("""["']?y["']?\s*[:=]\s*([0-9]+\.?[0-9]*)""", RegexOption.IGNORE_CASE)
+        private val NUM_REGEX = Regex("""-?[0-9]+\.?[0-9]*""")
     }
 }

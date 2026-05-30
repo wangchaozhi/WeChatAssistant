@@ -148,7 +148,12 @@ class ClickerAccessibilityService : AccessibilityService() {
             }
             ActionType.AI_TAP -> {
                 val target = action.aiPrompt ?: return
-                val point = tap.locate(target, scriptId).getOrNull() ?: return
+                val result = tap.locate(target, scriptId)
+                val point = result.getOrNull()
+                App.from(this@ClickerAccessibilityService).appendLog(
+                    "AITAP exec point=$point err=${result.exceptionOrNull()?.message}"
+                )
+                if (point == null) return
                 performGesture(
                     action.copy(
                         type = ActionType.TAP,
@@ -190,18 +195,39 @@ class ClickerAccessibilityService : AccessibilityService() {
         val focus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             ?: findEditable(root)
             ?: return false
+        // 多行输入框：回车 = 在光标处插入换行；单行：先尝试 IME 提交动作（发送/搜索/下一步）。
+        if (focus.isMultiLine) {
+            if (insertNewlineAtCursor(focus)) return true
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val imeEnterId = AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
             if (focus.performAction(imeEnterId)) return true
         }
-        val current = focus.text?.toString().orEmpty()
-        val args = Bundle().apply {
-            putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                current + "\n",
-            )
+        return insertNewlineAtCursor(focus)
+    }
+
+    /** 在当前光标/选区处插入换行，并把光标移到换行之后；无法读到选区时退化为末尾追加。 */
+    private fun insertNewlineAtCursor(node: AccessibilityNodeInfo): Boolean {
+        val text = node.text?.toString().orEmpty()
+        val start = node.textSelectionStart
+        val end = node.textSelectionEnd
+        val (newText, cursor) = if (start in 0..text.length && end in 0..text.length) {
+            val s = minOf(start, end)
+            val e = maxOf(start, end)
+            (text.substring(0, s) + "\n" + text.substring(e)) to (s + 1)
+        } else {
+            (text + "\n") to (text.length + 1)
         }
-        return focus.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        val setArgs = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
+        }
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setArgs)) return false
+        val selArgs = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
+        }
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
+        return true
     }
 
     private suspend fun performGesture(a: Action) = withContext(Dispatchers.Main.immediate) {
