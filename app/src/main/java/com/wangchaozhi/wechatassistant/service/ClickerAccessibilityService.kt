@@ -144,6 +144,13 @@ class ClickerAccessibilityService : AccessibilityService() {
         val startId = data.actions.firstOrNull { it.type == ActionType.START }?.id
             ?: data.actions.first().id
         val baselines = HashMap<String, Int>()   // 快照名称 -> 指纹
+        // 快照名称 -> 范围矩形（取该名快照节点上设定的范围）。条件单快照比较时复用同一范围取实时页面。
+        val snapRegions = HashMap<String, android.graphics.Rect?>()
+        data.actions.forEach { a ->
+            if (a.type == ActionType.SNAPSHOT) {
+                snapRegions[a.aiPrompt?.ifBlank { null } ?: "默认"] = regionOf(a)
+            }
+        }
         val stack = ArrayDeque<Long>()
         stack.addLast(startId)
         var visited = 0
@@ -157,18 +164,32 @@ class ClickerAccessibilityService : AccessibilityService() {
                 ActionType.START -> 0
                 ActionType.SNAPSHOT -> {
                     val key = node.aiPrompt?.ifBlank { null } ?: "默认"
-                    val fp = pageFingerprint()
+                    val region = regionOf(node)
+                    val fp = pageFingerprint(region)
                     baselines[key] = fp
-                    App.from(this@ClickerAccessibilityService).appendLog("SNAPSHOT[$key]=$fp")
+                    App.from(this@ClickerAccessibilityService).appendLog("SNAPSHOT[$key]=$fp region=$region")
                     0
                 }
                 ActionType.IF_PAGE_CHANGED -> {
-                    val key = node.aiPrompt?.ifBlank { null } ?: "默认"
-                    val base = baselines[key]
-                    val now = pageFingerprint()
-                    val changed = base != null && now != base
-                    App.from(this@ClickerAccessibilityService)
-                        .appendLog("IF vs 快照[$key] changed=$changed (now=$now base=$base)")
+                    val keyA = node.aiPrompt?.ifBlank { null } ?: "默认"
+                    val keyB = node.templatePath?.ifBlank { null }   // 复用字段存「快照B」名称
+                    val changed = if (keyB != null) {
+                        // 比较两个具名快照：都拍过且不同 => 变了。
+                        val a = baselines[keyA]
+                        val b = baselines[keyB]
+                        val c = a != null && b != null && a != b
+                        App.from(this@ClickerAccessibilityService)
+                            .appendLog("IF 快照[$keyA]=$a vs 快照[$keyB]=$b changed=$c")
+                        c
+                    } else {
+                        // 单快照：当前实时页面 vs 快照A。复用快照A 的范围，保证比的是同一区域。
+                        val base = baselines[keyA]
+                        val now = pageFingerprint(snapRegions[keyA])
+                        val c = base != null && now != base
+                        App.from(this@ClickerAccessibilityService)
+                            .appendLog("IF vs 快照[$keyA] changed=$c (now=$now base=$base)")
+                        c
+                    }
                     if (changed) 0 else 1
                 }
                 else -> {
@@ -189,25 +210,37 @@ class ClickerAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** 当前活动窗口可见节点的指纹：拼接 text/className/bounds 后取 hash。 */
-    private suspend fun pageFingerprint(): Int = withContext(Dispatchers.Main.immediate) {
-        val root = rootInActiveWindow ?: return@withContext 0
-        val sb = StringBuilder()
-        val rect = android.graphics.Rect()
-        fun walk(node: AccessibilityNodeInfo?) {
-            if (node == null) return
-            if (node.isVisibleToUser) {
-                node.getBoundsInScreen(rect)
-                sb.append(node.className).append('|')
-                    .append(node.text ?: "").append('|')
-                    .append(rect.left).append(',').append(rect.top).append(',')
-                    .append(rect.right).append(',').append(rect.bottom).append(';')
+    /** 从快照节点的 startX/startY/endX/endY 取范围矩形；无效则整页（null）。 */
+    private fun regionOf(node: Action): android.graphics.Rect? =
+        if (node.endX > node.startX && node.endY > node.startY)
+            android.graphics.Rect(node.startX.toInt(), node.startY.toInt(), node.endX.toInt(), node.endY.toInt())
+        else null
+
+    /**
+     * 当前活动窗口可见节点的指纹：拼接 text/className/bounds 后取 hash。
+     * [region] 非空时只统计与该屏幕矩形相交的节点（用于范围快照）。
+     */
+    private suspend fun pageFingerprint(region: android.graphics.Rect? = null): Int =
+        withContext(Dispatchers.Main.immediate) {
+            val root = rootInActiveWindow ?: return@withContext 0
+            val sb = StringBuilder()
+            val rect = android.graphics.Rect()
+            fun walk(node: AccessibilityNodeInfo?) {
+                if (node == null) return
+                if (node.isVisibleToUser) {
+                    node.getBoundsInScreen(rect)
+                    if (region == null || android.graphics.Rect.intersects(region, rect)) {
+                        sb.append(node.className).append('|')
+                            .append(node.text ?: "").append('|')
+                            .append(rect.left).append(',').append(rect.top).append(',')
+                            .append(rect.right).append(',').append(rect.bottom).append(';')
+                    }
+                }
+                for (i in 0 until node.childCount) walk(node.getChild(i))
             }
-            for (i in 0 until node.childCount) walk(node.getChild(i))
+            walk(root)
+            sb.toString().hashCode()
         }
-        walk(root)
-        sb.toString().hashCode()
-    }
 
     private suspend fun execute(
         action: Action,

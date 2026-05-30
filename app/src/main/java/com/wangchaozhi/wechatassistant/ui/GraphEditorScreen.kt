@@ -105,14 +105,15 @@ fun GraphEditorScreen(
     val density = LocalDensity.current.density
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // 模板选图（IMAGE_MATCH 节点）：pendingRecaptureId 为待设模板的节点 id。
+    // 选图：pendingRecaptureId=给 IMAGE_MATCH 设模板；pendingRegionId=给 SNAPSHOT 框选屏幕范围。
     var pendingRecaptureId by remember { mutableStateOf<Long?>(null) }
+    var pendingRegionId by remember { mutableStateOf<Long?>(null) }
     var cropSource by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     val pickImage = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         val bmp = uri?.let { decodeBitmap(context, it) }
-        if (bmp != null) cropSource = bmp else pendingRecaptureId = null
+        if (bmp != null) cropSource = bmp else { pendingRecaptureId = null; pendingRegionId = null }
     }
 
     LaunchedEffect(scriptId) {
@@ -373,6 +374,15 @@ fun GraphEditorScreen(
                         )
                     )
                 },
+                onPickRegion = {
+                    pendingRegionId = ed
+                    editingId = null
+                    pickImage.launch(
+                        androidx.activity.result.PickVisualMediaRequest(
+                            androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+                        )
+                    )
+                },
             )
         }
     }
@@ -415,21 +425,39 @@ fun GraphEditorScreen(
         if (s != null) ScriptMetaDialog(s, onDismiss = { showMeta = false }, onConfirm = { script = it; showMeta = false })
     }
 
-    // 模板裁剪
+    // 裁剪/框选弹窗
     val src = cropSource
     if (src != null) {
-        TemplateCropDialog(
-            source = src,
-            onDismiss = { cropSource = null; pendingRecaptureId = null },
-            onConfirm = { bitmap ->
-                val path = com.wangchaozhi.wechatassistant.feature.match
-                    .TemplateMatchUseCase.saveTemplate(context, bitmap)
-                val id = pendingRecaptureId
-                val i = if (id != null) nodes.indexOfFirst { it.id == id } else -1
-                if (i >= 0 && path != null) nodes[i] = nodes[i].copy(templatePath = path)
-                cropSource = null; pendingRecaptureId = null
-            },
-        )
+        val regionId = pendingRegionId
+        if (regionId != null) {
+            RegionBandDialog(
+                source = src,
+                onDismiss = { cropSource = null; pendingRegionId = null },
+                onConfirm = { rect ->
+                    val i = nodes.indexOfFirst { it.id == regionId }
+                    if (i >= 0) {
+                        pushUndo()
+                        nodes[i] = nodes[i].copy(
+                            startX = rect.left, startY = rect.top, endX = rect.right, endY = rect.bottom,
+                        )
+                    }
+                    cropSource = null; pendingRegionId = null
+                },
+            )
+        } else {
+            TemplateCropDialog(
+                source = src,
+                onDismiss = { cropSource = null; pendingRecaptureId = null },
+                onConfirm = { bitmap ->
+                    val path = com.wangchaozhi.wechatassistant.feature.match
+                        .TemplateMatchUseCase.saveTemplate(context, bitmap)
+                    val id = pendingRecaptureId
+                    val i = if (id != null) nodes.indexOfFirst { it.id == id } else -1
+                    if (i >= 0 && path != null) nodes[i] = nodes[i].copy(templatePath = path)
+                    cropSource = null; pendingRecaptureId = null
+                },
+            )
+        }
     }
 }
 
@@ -473,9 +501,19 @@ private fun NodeCard(
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(typeLabel(node.type), color = Color.White, style = MaterialTheme.typography.bodyMedium)
-            if (node.type == ActionType.SNAPSHOT || node.type == ActionType.IF_PAGE_CHANGED) {
+            if (node.type == ActionType.SNAPSHOT) {
+                val region = node.endX > node.startX && node.endY > node.startY
                 Text(
-                    "「${node.aiPrompt?.ifBlank { null } ?: "默认"}」",
+                    "「${node.aiPrompt?.ifBlank { null } ?: "默认"}」" + if (region) " ▣范围" else "",
+                    color = Color(0xCCFFFFFF),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            if (node.type == ActionType.IF_PAGE_CHANGED) {
+                val a = node.aiPrompt?.ifBlank { null } ?: "默认"
+                val b = node.templatePath?.ifBlank { null }
+                Text(
+                    if (b != null) "「$a」↔「$b」" else "「$a」↔ 实时",
                     color = Color(0xCCFFFFFF),
                     style = MaterialTheme.typography.labelSmall,
                 )

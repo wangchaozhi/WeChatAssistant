@@ -568,6 +568,7 @@ internal fun EditActionDialog(
     onDismiss: () -> Unit,
     onConfirm: (Action) -> Unit,
     onRecaptureTemplate: () -> Unit = {},
+    onPickRegion: () -> Unit = {},
 ) {
     var startX by remember { mutableStateOf(action.startX.toString()) }
     var startY by remember { mutableStateOf(action.startY.toString()) }
@@ -579,6 +580,8 @@ internal fun EditActionDialog(
     var threshold by remember { mutableStateOf(action.matchThreshold.toString()) }
     var retry by remember { mutableStateOf(action.retryCount.toString()) }
     var repeatSteps by remember { mutableStateOf(action.repeatPrevSteps.toString()) }
+    // IF_PAGE_CHANGED 复用 templatePath 存「快照B」名称。
+    var snapshotB by remember { mutableStateOf(action.templatePath.orEmpty()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -649,16 +652,39 @@ internal fun EditActionDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Spacer(Modifier.height(8.dp))
+                    val hasRegion = action.endX > action.startX && action.endY > action.startY
+                    Text(
+                        if (hasRegion)
+                            "范围：(${action.startX.toInt()},${action.startY.toInt()})-(${action.endX.toInt()},${action.endY.toInt()})"
+                        else "范围：整页",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedButton(onClick = onPickRegion, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (hasRegion) "重选屏幕范围" else "选屏幕范围（截图框选）")
+                    }
                 }
                 if (action.type == ActionType.IF_PAGE_CHANGED) {
                     Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
                         value = aiPrompt,
                         onValueChange = { aiPrompt = it },
-                        label = { Text("对比哪个快照（填快照名称）") },
+                        label = { Text("快照 A 名称") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = snapshotB,
+                        onValueChange = { snapshotB = it },
+                        label = { Text("快照 B 名称（留空＝与当前实时页面比）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text("两个快照都填＝比较 A 与 B 是否不同；不同走「是」、相同走「否」。",
+                        style = MaterialTheme.typography.bodySmall)
                 }
                 if (action.type == ActionType.IMAGE_MATCH) {
                     Spacer(Modifier.height(6.dp))
@@ -695,6 +721,9 @@ internal fun EditActionDialog(
                         retryCount = retry.toIntOrNull()?.coerceAtLeast(0) ?: action.retryCount,
                         repeatPrevSteps = repeatSteps.toIntOrNull()?.coerceAtLeast(1)
                             ?: action.repeatPrevSteps,
+                        // IF 节点用 templatePath 存快照B 名称；其它类型保持原 templatePath。
+                        templatePath = if (action.type == ActionType.IF_PAGE_CHANGED)
+                            snapshotB.ifBlank { null } else action.templatePath,
                     )
                 )
             }) { Text("保存") }
