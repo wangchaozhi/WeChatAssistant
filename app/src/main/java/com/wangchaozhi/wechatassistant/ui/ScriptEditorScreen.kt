@@ -9,9 +9,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
@@ -61,6 +69,31 @@ fun ScriptEditorScreen(
     var loaded by remember { mutableStateOf(false) }
     var showAddAiDialog by remember { mutableStateOf(false) }
     var editingIndex by remember { mutableStateOf<Int?>(null) }
+    // 模板来源：从相册选一张「系统截图」（与运行分辨率一致才能匹配），再裁剪。
+    // pendingForNew=新增一步；pendingRecaptureIndex!=null=替换已有步骤的模板。
+    var pendingForNew by remember { mutableStateOf(false) }
+    var pendingRecaptureIndex by remember { mutableStateOf<Int?>(null) }
+    var cropSource by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    val pickImage = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        val bmp = uri?.let { decodeBitmap(context, it) }
+        if (bmp != null) {
+            cropSource = bmp
+        } else {
+            pendingForNew = false
+            pendingRecaptureIndex = null
+        }
+    }
+    fun launchTemplatePicker() {
+        pickImage.launch(
+            androidx.activity.result.PickVisualMediaRequest(
+                androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+            )
+        )
+    }
 
     LaunchedEffect(scriptId) {
         val data = viewModel.loadScript(scriptId)
@@ -114,6 +147,11 @@ fun ScriptEditorScreen(
                             editingIndex = actions.size - 1
                         },
                         onAddAi = { showAddAiDialog = true },
+                        onAddImageMatch = {
+                            pendingForNew = true
+                            pendingRecaptureIndex = null
+                            launchTemplatePicker()
+                        },
                     )
                 }
             }
@@ -181,10 +219,56 @@ fun ScriptEditorScreen(
                     actions[ei] = updated
                     editingIndex = null
                 },
+                onRecaptureTemplate = {
+                    pendingForNew = false
+                    pendingRecaptureIndex = ei
+                    editingIndex = null
+                    launchTemplatePicker()
+                },
+            )
+        }
+
+        val src = cropSource
+        if (src != null) {
+            TemplateCropDialog(
+                source = src,
+                onDismiss = {
+                    cropSource = null
+                    pendingForNew = false
+                    pendingRecaptureIndex = null
+                },
+                onConfirm = { bitmap ->
+                    val path = com.wangchaozhi.wechatassistant.feature.match
+                        .TemplateMatchUseCase.saveTemplate(context, bitmap)
+                    val idx = pendingRecaptureIndex
+                    if (idx != null && idx in actions.indices && path != null) {
+                        actions[idx] = actions[idx].copy(templatePath = path)
+                    } else if (idx == null && path != null) {
+                        actions += Action(
+                            scriptId = scriptId,
+                            index = actions.size,
+                            type = ActionType.IMAGE_MATCH,
+                            startX = 0f, startY = 0f,
+                            delayBeforeMs = 500L,
+                            templatePath = path,
+                        )
+                        editingIndex = actions.size - 1
+                    }
+                    cropSource = null
+                    pendingForNew = false
+                    pendingRecaptureIndex = null
+                },
             )
         }
     }
 }
+
+private fun decodeBitmap(context: android.content.Context, uri: android.net.Uri): android.graphics.Bitmap? =
+    runCatching {
+        context.contentResolver.openInputStream(uri)?.use {
+            android.graphics.BitmapFactory.decodeStream(it)
+        }
+    }.getOrNull()
 
 private fun <T> MutableList<T>.move(from: Int, to: Int) {
     if (from == to) return
@@ -253,6 +337,10 @@ private fun ActionRow(
             Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (action.type == ActionType.IMAGE_MATCH) {
+                TemplateThumb(action.templatePath, 44.dp)
+                Spacer(Modifier.width(10.dp))
+            }
             Column(Modifier.weight(1f)) {
                 Text("#$index  ${typeLabel(action.type)}", style = MaterialTheme.typography.bodyLarge)
                 Text(describe(action), style = MaterialTheme.typography.bodySmall)
@@ -269,9 +357,35 @@ private fun ActionRow(
 }
 
 @Composable
+private fun TemplateThumb(path: String?, size: androidx.compose.ui.unit.Dp) {
+    val image = remember(path) {
+        path?.let { runCatching { android.graphics.BitmapFactory.decodeFile(it)?.asImageBitmap() }.getOrNull() }
+    }
+    Box(
+        Modifier
+            .size(size)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (image != null) {
+            Image(
+                bitmap = image,
+                contentDescription = "模板",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Text("?", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
 private fun AddActionMenu(
     onAddSimple: (ActionType) -> Unit,
     onAddAi: () -> Unit,
+    onAddImageMatch: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
@@ -308,6 +422,10 @@ private fun AddActionMenu(
                 text = { Text("AI 步骤…") },
                 onClick = { onAddAi(); expanded = false },
             )
+            DropdownMenuItem(
+                text = { Text("找图点击（模板）…") },
+                onClick = { onAddImageMatch(); expanded = false },
+            )
         }
     }
 }
@@ -329,7 +447,7 @@ private fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Acti
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 1000L,
     )
-    ActionType.SCREENSHOT_AI, ActionType.AI_TAP -> Action(
+    ActionType.SCREENSHOT_AI, ActionType.AI_TAP, ActionType.IMAGE_MATCH -> Action(
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f,
     )
@@ -346,6 +464,7 @@ private fun typeLabel(t: ActionType): String = when (t) {
     ActionType.WAIT -> "等待"
     ActionType.SCREENSHOT_AI -> "AI 截图问答"
     ActionType.AI_TAP -> "AI 找图点击"
+    ActionType.IMAGE_MATCH -> "找图点击（模板）"
     ActionType.PASTE -> "粘贴"
     ActionType.ENTER -> "回车"
 }
@@ -358,6 +477,8 @@ private fun describe(a: Action): String = when (a.type) {
     ActionType.WAIT -> "等待 ${a.durationMs}ms"
     ActionType.SCREENSHOT_AI -> "prompt: \"${a.aiPrompt?.take(40) ?: ""}\""
     ActionType.AI_TAP -> "目标: \"${a.aiPrompt?.take(40) ?: ""}\""
+    ActionType.IMAGE_MATCH ->
+        "${if (a.templatePath != null) "找图点击" else "⚠ 未设模板"} · 阈值 ${"%.2f".format(a.matchThreshold)} · 延迟 ${a.delayBeforeMs}ms"
     ActionType.PASTE -> "粘贴到当前焦点输入框 · 延迟 ${a.delayBeforeMs}ms"
     ActionType.ENTER -> "回车 (IME action 或换行) · 延迟 ${a.delayBeforeMs}ms"
 }
@@ -421,6 +542,7 @@ private fun EditActionDialog(
     action: Action,
     onDismiss: () -> Unit,
     onConfirm: (Action) -> Unit,
+    onRecaptureTemplate: () -> Unit = {},
 ) {
     var startX by remember { mutableStateOf(action.startX.toString()) }
     var startY by remember { mutableStateOf(action.startY.toString()) }
@@ -429,6 +551,7 @@ private fun EditActionDialog(
     var duration by remember { mutableStateOf(action.durationMs.toString()) }
     var delay by remember { mutableStateOf(action.delayBeforeMs.toString()) }
     var aiPrompt by remember { mutableStateOf(action.aiPrompt.orEmpty()) }
+    var threshold by remember { mutableStateOf(action.matchThreshold.toString()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -456,10 +579,11 @@ private fun EditActionDialog(
                         }
                     }
                     ActionType.WAIT, ActionType.SCREENSHOT_AI, ActionType.AI_TAP,
-                    ActionType.PASTE, ActionType.ENTER -> { /* no coords */ }
+                    ActionType.IMAGE_MATCH, ActionType.PASTE, ActionType.ENTER -> { /* no coords */ }
                 }
                 Spacer(Modifier.height(6.dp))
                 if (action.type != ActionType.SCREENSHOT_AI &&
+                    action.type != ActionType.IMAGE_MATCH &&
                     action.type != ActionType.PASTE &&
                     action.type != ActionType.ENTER
                 ) {
@@ -478,6 +602,23 @@ private fun EditActionDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                if (action.type == ActionType.IMAGE_MATCH) {
+                    Spacer(Modifier.height(6.dp))
+                    NumField(threshold, { threshold = it }, "匹配阈值 (0~1，越大越严格)", Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TemplateThumb(action.templatePath, 64.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            if (action.templatePath != null) "点击的目标（匹配到就点它）" else "⚠ 尚未设置模板图",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedButton(onClick = onRecaptureTemplate, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (action.templatePath != null) "重新选图 / 截取模板" else "选图 / 截取模板")
+                    }
+                }
             }
         },
         confirmButton = {
@@ -491,6 +632,8 @@ private fun EditActionDialog(
                         durationMs = duration.toLongOrNull() ?: action.durationMs,
                         delayBeforeMs = delay.toLongOrNull() ?: action.delayBeforeMs,
                         aiPrompt = aiPrompt.ifBlank { null },
+                        matchThreshold = threshold.toFloatOrNull()?.coerceIn(0.1f, 1f)
+                            ?: action.matchThreshold,
                     )
                 )
             }) { Text("保存") }

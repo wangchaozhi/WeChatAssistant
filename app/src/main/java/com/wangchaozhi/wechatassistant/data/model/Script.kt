@@ -14,7 +14,8 @@ data class Script(
     val speed: Float = 1.0f,
 )
 
-enum class ActionType { TAP, SWIPE, LONG_PRESS, WAIT, SCREENSHOT_AI, AI_TAP, PASTE, ENTER }
+// 注意：Room 用 ordinal 存储 ActionType，新增类型只能追加到末尾，不能插入中间。
+enum class ActionType { TAP, SWIPE, LONG_PRESS, WAIT, SCREENSHOT_AI, AI_TAP, PASTE, ENTER, IMAGE_MATCH }
 
 @Entity(
     tableName = "actions",
@@ -40,6 +41,9 @@ data class Action(
     val durationMs: Long = 80L,
     val delayBeforeMs: Long = 0L,
     val aiPrompt: String? = null,
+    // IMAGE_MATCH 专用：模板图片在内部存储的绝对路径，以及匹配置信度阈值 (0~1)。
+    val templatePath: String? = null,
+    val matchThreshold: Float = 0.85f,
 )
 
 data class ScriptWithActions(

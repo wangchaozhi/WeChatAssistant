@@ -11,6 +11,7 @@ import com.wangchaozhi.wechatassistant.data.repo.ScriptRepository
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiTapUseCase
 import com.wangchaozhi.wechatassistant.feature.ai.ScreenshotAiUseCase
+import com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
 import com.wangchaozhi.wechatassistant.util.ShizukuManager
 import com.wangchaozhi.wechatassistant.feature.qwen.QwenRepository
 import okhttp3.OkHttpClient
@@ -68,6 +69,8 @@ class App : Application() {
     }
 
     val aiTap: AiTapUseCase by lazy { AiTapUseCase(this, qwenRepo, aiAnswerRepo) }
+
+    val templateMatch: TemplateMatchUseCase by lazy { TemplateMatchUseCase(this) }
 
     override fun onCreate() {
         super.onCreate()

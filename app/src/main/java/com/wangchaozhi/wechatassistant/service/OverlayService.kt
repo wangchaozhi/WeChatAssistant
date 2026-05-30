@@ -63,6 +63,16 @@ class OverlayService : LifecycleService() {
     private val recordedTouches = mutableListOf<ServiceBus.RawTouch>()
     private val recordedPastes = mutableListOf<Long>()
     private val recordedEnters = mutableListOf<Long>()
+    // 录制时截的模板：时间戳 + 模板图路径，停止录制时插进时间线变成 IMAGE_MATCH 步骤。
+    private val recordedTemplates = mutableListOf<Pair<Long, String>>()
+    private var cropOverlay: View? = null
+    // 截模板/裁剪期间，屏蔽把全局触摸录进脚本（否则拖裁剪框会被当成操作录下来）。
+    @Volatile private var suppressTouchRecording = false
+    // 面板收起/展开
+    private var panelParams: WindowManager.LayoutParams? = null
+    private var panelContent: View? = null
+    private var collapsedHandle: View? = null
+    private var collapsed = false
     private val shizukuReader by lazy { ShizukuTouchReader(this) }
 
     override fun onCreate() {
@@ -73,7 +83,9 @@ class OverlayService : LifecycleService() {
         ServiceBus.overlayReady.value = true
         lifecycleScope.launch {
             ServiceBus.recordedTap.collect { tap ->
-                if (recording && acceptTap(tap)) {
+                if (recording && !suppressTouchRecording &&
+                    !isOnPanel(tap.startX, tap.startY) && acceptTap(tap)
+                ) {
                     recordedTouches += tap
                     refreshStatus()
                 }
@@ -223,6 +235,7 @@ class OverlayService : LifecycleService() {
         recBtn = btnRec
         val btnHome = compactBtn(ctx, "↗") { launchHome(null) }
         val btnClose = compactBtn(ctx, "×") { stopSelf() }
+        val btnCollapse = compactBtn(ctx, "⋮") { collapsePanel() }
         val nodesRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -280,18 +293,59 @@ class OverlayService : LifecycleService() {
             }
             ServiceBus.enterCmd.tryEmit(Unit)
         }
+        val btnTemplate = compactBtn(ctx, "模板") {
+            if (!recording) {
+                Toast.makeText(ctx, "请先开始录制，再截模板", Toast.LENGTH_SHORT).show()
+                return@compactBtn
+            }
+            if (!ServiceBus.captureReady.value) {
+                Toast.makeText(ctx, "请先在主界面启动「截图服务」", Toast.LENGTH_LONG).show()
+                return@compactBtn
+            }
+            captureTemplateForRecording()
+        }
         topRow.addView(label)
         topRow.addView(btnRec)
         topRow.addView(btnPlayStop)
         topRow.addView(btnHome)
         topRow.addView(btnClose)
+        topRow.addView(btnCollapse)
         nodesRow.addView(nodesLabel)
         nodesRow.addView(btnAi)
         nodesRow.addView(btnPaste)
         nodesRow.addView(btnEnter)
-        container.addView(topRow)
-        container.addView(nodesRow)
+        val templateRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, 0)
+            showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
+            dividerDrawable = rowSpacer
+        }
+        val templateLabel = TextView(ctx).apply {
+            text = "找图"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            minWidth = dp(84)
+            gravity = Gravity.CENTER_VERTICAL
+            isSingleLine = true
+            setPadding(0, 0, dp(8), 0)
+        }
+        templateRow.addView(templateLabel)
+        templateRow.addView(btnTemplate)
+        val content = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(topRow)
+            addView(nodesRow)
+            addView(templateRow)
+        }
+        panelContent = content
+        // 收起后的小把手：可拖到任意位置，轻点展开
+        val handle = compactBtn(ctx, "‹") { }.apply { visibility = View.GONE }
+        collapsedHandle = handle
+        attachHandleDrag(handle)
+        container.addView(content)
         container.addView(buildBubble(ctx))
+        container.addView(handle)
 
         val params = WindowManager.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -305,10 +359,72 @@ class OverlayService : LifecycleService() {
             gravity = Gravity.TOP or Gravity.START
             x = dp(8); y = dp(80)
         }
+        panelParams = params
 
         attachDrag(container, params)
         wm.addView(container, params)
         panelView = container
+    }
+
+    private fun collapsePanel() {
+        if (collapsed) return
+        collapsed = true
+        panelContent?.visibility = View.GONE
+        bubble?.visibility = View.GONE
+        collapsedHandle?.visibility = View.VISIBLE
+        // 停靠到屏幕右边缘
+        panelView?.post {
+            val p = panelParams ?: return@post
+            val screenW = resources.displayMetrics.widthPixels
+            p.x = (screenW - (panelView?.width ?: 0)).coerceAtLeast(0)
+            runCatching { wm.updateViewLayout(panelView, p) }
+        }
+    }
+
+    /** 把手：拖动移动整个窗口，未超过触摸阈值则视为轻点 → 展开。 */
+    private fun attachHandleDrag(handle: View) {
+        val slop = dp(6)
+        var startX = 0; var startY = 0
+        var downRawX = 0f; var downRawY = 0f
+        var moved = false
+        handle.setOnTouchListener { _, e ->
+            val p = panelParams ?: return@setOnTouchListener false
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = p.x; startY = p.y
+                    downRawX = e.rawX; downRawY = e.rawY
+                    moved = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (abs(e.rawX - downRawX) > slop || abs(e.rawY - downRawY) > slop) moved = true
+                    p.x = startX + (e.rawX - downRawX).toInt()
+                    p.y = startY + (e.rawY - downRawY).toInt()
+                    runCatching { wm.updateViewLayout(panelView, p) }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!moved) expandPanel()
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun expandPanel() {
+        if (!collapsed) return
+        collapsed = false
+        collapsedHandle?.visibility = View.GONE
+        panelContent?.visibility = View.VISIBLE
+        // 展开后若超出右边缘则回拉，避免被屏幕裁掉
+        panelView?.post {
+            val p = panelParams ?: return@post
+            val screenW = resources.displayMetrics.widthPixels
+            val w = panelView?.width ?: 0
+            if (p.x + w > screenW) p.x = (screenW - w - dp(8)).coerceAtLeast(0)
+            runCatching { wm.updateViewLayout(panelView, p) }
+        }
     }
 
     private fun buildBubble(ctx: Context): LinearLayout {
@@ -499,6 +615,17 @@ class OverlayService : LifecycleService() {
         }
     }
 
+    /** 触摸是否落在悬浮面板范围内（含一点外扩）。面板上的按钮点击不该被录成操作。 */
+    private fun isOnPanel(x: Float, y: Float): Boolean {
+        val v = panelView ?: return false
+        if (v.width == 0 || v.height == 0) return false
+        val loc = IntArray(2)
+        v.getLocationOnScreen(loc)
+        val pad = dp(8)
+        return x >= loc[0] - pad && x <= loc[0] + v.width + pad &&
+            y >= loc[1] - pad && y <= loc[1] + v.height + pad
+    }
+
     private fun acceptTap(tap: ServiceBus.RawTouch): Boolean {
         val last = recordedTouches.lastOrNull() ?: return true
         val dt = tap.timestamp - last.timestamp
@@ -525,6 +652,7 @@ class OverlayService : LifecycleService() {
             recordedTouches.clear()
             recordedPastes.clear()
             recordedEnters.clear()
+            recordedTemplates.clear()
             btn.text = "完成"
             ServiceBus.recordingMode.value = true
             ServiceBus.shizukuRecording.value = true
@@ -553,7 +681,8 @@ class OverlayService : LifecycleService() {
 
     private fun refreshStatus() {
         if (recording) {
-            val captured = recordedTouches.size
+            val captured = recordedTouches.size + recordedPastes.size +
+                recordedEnters.size + recordedTemplates.size
             statusLabel?.text = "录制中 · $captured 步"
             return
         }
@@ -566,18 +695,102 @@ class OverlayService : LifecycleService() {
         playStopBtn?.text = if (st is ServiceBus.PlayerState.Playing) "停止" else "▶"
     }
 
+    /** 录制中点「模板」：先截当前目标屏（此时裁剪层尚未显示，截到的是真实页面），再弹裁剪层。 */
+    private fun captureTemplateForRecording() {
+        if (cropOverlay != null) return
+        // 从按下「模板」起就停止录入触摸，直到裁剪层关闭。
+        suppressTouchRecording = true
+        val stamp = System.currentTimeMillis()
+        lifecycleScope.launch {
+            ServiceBus.lastBitmap.value = null
+            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture)
+            val bmp = kotlinx.coroutines.withTimeoutOrNull(5_000) {
+                ServiceBus.lastBitmap.first { it != null }
+            }
+            if (bmp == null) {
+                Toast.makeText(this@OverlayService, "截图失败", Toast.LENGTH_SHORT).show()
+                suppressTouchRecording = false
+                return@launch
+            }
+            showCropOverlay(bmp, stamp)
+        }
+    }
+
+    private fun showCropOverlay(bmp: android.graphics.Bitmap, stamp: Long) {
+        val ctx: Context = this
+        val cropView = TemplateCropView(ctx, bmp)
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#F2000000"))
+        }
+        val hint = TextView(ctx).apply {
+            text = "拖动框选要识别的目标，然后点「确定」"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setPadding(dp(16), dp(12), dp(16), dp(8))
+        }
+        val btnRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(16), dp(8), dp(16), dp(16))
+        }
+        val cancel = compactBtn(ctx, "取消") { removeCropOverlay() }
+        val confirm = compactBtn(ctx, "确定") {
+            val cropped = cropView.crop()
+            if (cropped == null) {
+                Toast.makeText(ctx, "裁剪区域太小", Toast.LENGTH_SHORT).show()
+                return@compactBtn
+            }
+            val path = com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
+                .saveTemplate(ctx, cropped)
+            if (path != null) {
+                recordedTemplates += stamp to path
+                refreshStatus()
+                Toast.makeText(ctx, "已记录找图点击步骤", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(ctx, "模板保存失败", Toast.LENGTH_SHORT).show()
+            }
+            removeCropOverlay()
+        }
+        btnRow.addView(cancel)
+        btnRow.addView(confirm)
+        root.addView(hint)
+        root.addView(cropView, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(btnRow)
+
+        val params = WindowManager.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        )
+        cropOverlay = root
+        wm.addView(root, params)
+    }
+
+    private fun removeCropOverlay() {
+        cropOverlay?.let { runCatching { wm.removeView(it) } }
+        cropOverlay = null
+        // 稍延迟再恢复，吞掉关闭裁剪层时「确定/取消」那一下的触摸，避免被录进去。
+        bubbleHandler.postDelayed({ suppressTouchRecording = false }, 250)
+    }
+
     private fun persistRecording() {
         val touches = recordedTouches.toList()
         val pastes = recordedPastes.toList()
         val enters = recordedEnters.toList()
+        val templates = recordedTemplates.toList()
         recordedTouches.clear()
         recordedPastes.clear()
         recordedEnters.clear()
-        if (touches.isEmpty() && pastes.isEmpty() && enters.isEmpty()) return
+        recordedTemplates.clear()
+        if (touches.isEmpty() && pastes.isEmpty() && enters.isEmpty() && templates.isEmpty()) return
         val events: List<RecordedEvent> =
             touches.map { RecordedEvent.Touch(it) } +
                 pastes.map { RecordedEvent.Paste(it) } +
-                enters.map { RecordedEvent.Enter(it) }
+                enters.map { RecordedEvent.Enter(it) } +
+                templates.map { RecordedEvent.ImageMatch(it.first, it.second) }
         val sorted = events.sortedBy { it.timestamp }
         val firstTs = sorted.first().timestamp
         val actions = sorted.mapIndexed { i, ev ->
@@ -623,6 +836,16 @@ class OverlayService : LifecycleService() {
                     durationMs = 0L,
                     delayBeforeMs = delay,
                 )
+                is RecordedEvent.ImageMatch -> Action(
+                    scriptId = 0,
+                    index = i,
+                    type = ActionType.IMAGE_MATCH,
+                    startX = 0f,
+                    startY = 0f,
+                    durationMs = 0L,
+                    delayBeforeMs = delay,
+                    templatePath = ev.templatePath,
+                )
             }
         }
         val name = "脚本_" + SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(Date())
@@ -644,6 +867,9 @@ class OverlayService : LifecycleService() {
             override val endTimestamp: Long get() = timestamp
         }
         data class Enter(override val timestamp: Long) : RecordedEvent {
+            override val endTimestamp: Long get() = timestamp
+        }
+        data class ImageMatch(override val timestamp: Long, val templatePath: String) : RecordedEvent {
             override val endTimestamp: Long get() = timestamp
         }
     }
@@ -740,6 +966,7 @@ class OverlayService : LifecycleService() {
         shizukuReader.stop()
         ServiceBus.overlayReady.value = false
         ServiceBus.recordingMode.value = false
+        removeCropOverlay()
         panelView?.let { runCatching { wm.removeView(it) } }
         panelView = null
         recBtn = null

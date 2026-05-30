@@ -31,6 +31,9 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "QWEN_API_KEY", "\"$qwenApiKey\"")
+
+        // OpenCV 自带各 ABI 的 native 库，体积较大。只保留真机与模拟器常用的两个 ABI。
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
     buildTypes {
@@ -97,6 +100,8 @@ dependencies {
 
     implementation(libs.shizuku.api)
     implementation(libs.shizuku.provider)
+
+    implementation(libs.opencv)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

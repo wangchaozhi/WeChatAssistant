@@ -160,6 +160,22 @@ class ClickerAccessibilityService : AccessibilityService() {
                     )
                 )
             }
+            ActionType.IMAGE_MATCH -> {
+                val path = action.templatePath ?: return
+                val match = App.from(this@ClickerAccessibilityService)
+                    .templateMatch.locate(path, action.matchThreshold)
+                    .getOrNull() ?: return
+                performGesture(
+                    action.copy(
+                        type = ActionType.TAP,
+                        startX = match.point.x,
+                        startY = match.point.y,
+                        endX = match.point.x,
+                        endY = match.point.y,
+                        durationMs = action.durationMs.coerceAtLeast(80L),
+                    )
+                )
+            }
             ActionType.PASTE -> {
                 withContext(Dispatchers.Main.immediate) { pasteIntoFocused() }
             }
