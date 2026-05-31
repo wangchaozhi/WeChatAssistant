@@ -56,6 +56,7 @@ import com.wangchaozhi.wechatassistant.data.model.Action
 import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
+import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
 import kotlin.math.roundToInt
 
 // 节点固定尺寸（图空间 dp，scale=1 时）。端口锚点由此算术求得，免去逐卡测量。
@@ -365,6 +366,7 @@ fun GraphEditorScreen(
                 action = nodes[idx],
                 onDismiss = { editingId = null },
                 onConfirm = { updated -> nodes[idx] = updated; editingId = null },
+                fetchModels = { viewModel.fetchModels(it) },
                 onRecaptureTemplate = {
                     pendingRecaptureId = ed
                     editingId = null
@@ -461,6 +463,13 @@ fun GraphEditorScreen(
     }
 }
 
+/** AI 节点卡片上显示的「供应商 · 模型」简标；未指定时显示「跟随全局」。 */
+private fun aiModelLabel(node: Action): String {
+    val provider = AiProvider.parse(node.aiProvider) ?: return "跟随全局"
+    val model = node.aiModel?.ifBlank { null } ?: provider.models.firstOrNull().orEmpty()
+    return "${provider.label} · ${model.substringAfterLast('/')}"
+}
+
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawCurve(a: Offset, b: Offset, color: Color) {
     val path = Path().apply {
         moveTo(a.x, a.y)
@@ -520,6 +529,13 @@ private fun NodeCard(
                 val b = node.templatePath?.ifBlank { null }
                 Text(
                     if (b != null) "「$a」↔「$b」" else "「$a」↔ 实时",
+                    color = Color(0xCCFFFFFF),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            if (node.type == ActionType.SCREENSHOT_AI || node.type == ActionType.AI_TAP) {
+                Text(
+                    aiModelLabel(node),
                     color = Color(0xCCFFFFFF),
                     style = MaterialTheme.typography.labelSmall,
                 )

@@ -12,6 +12,8 @@ import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.data.repo.ScriptRepository
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
+import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
+import com.wangchaozhi.wechatassistant.feature.ai.VisionAiRepository
 import com.wangchaozhi.wechatassistant.service.ServiceBus
 import com.wangchaozhi.wechatassistant.util.ShizukuManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,6 +37,7 @@ class MainViewModel(
     private val scriptRepo: ScriptRepository,
     private val historyRepo: AiAnswerRepository,
     private val settings: SettingsRepository,
+    private val visionAi: VisionAiRepository,
 ) : ViewModel() {
 
     val scripts: StateFlow<List<Script>> = scriptRepo.observeScripts()
@@ -66,6 +69,22 @@ class MainViewModel(
     var qwenModel: String
         get() = settings.qwenModel
         set(value) { settings.qwenModel = value }
+
+    var modelScopeApiKey: String
+        get() = settings.modelScopeApiKey
+        set(value) { settings.modelScopeApiKey = value }
+
+    var modelScopeModel: String
+        get() = settings.modelScopeModel
+        set(value) { settings.modelScopeModel = value }
+
+    var defaultAiProvider: String
+        get() = settings.defaultAiProvider
+        set(value) { settings.defaultAiProvider = value }
+
+    /** 实时拉取某供应商官方可用模型列表（用于设置/节点的模型下拉）。 */
+    suspend fun fetchModels(provider: AiProvider): Result<List<String>> =
+        visionAi.listModels(provider)
 
     var thumbnailMaxSide: Int
         get() = settings.thumbnailMaxSide
@@ -147,7 +166,7 @@ class MainViewModel(
         fun factory(app: App) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                MainViewModel(app.scriptRepo, app.aiAnswerRepo, app.settingsRepo) as T
+                MainViewModel(app.scriptRepo, app.aiAnswerRepo, app.settingsRepo, app.visionAi) as T
         }
     }
 }

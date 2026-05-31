@@ -1,14 +1,10 @@
-package com.wangchaozhi.wechatassistant.feature.qwen
+package com.wangchaozhi.wechatassistant.feature.ai
 
 import android.graphics.Bitmap
 import com.wangchaozhi.wechatassistant.util.toBase64Jpeg
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -23,7 +19,11 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
-class QwenRepository(
+/**
+ * 魔搭社区（ModelScope）推理服务，采用 OpenAI 兼容的 /chat/completions 接口。
+ * 与 [com.wangchaozhi.wechatassistant.feature.qwen.QwenRepository] 接口一致，便于上层统一调度。
+ */
+class ModelScopeRepository(
     private val client: OkHttpClient,
     private val apiKeyProvider: () -> String,
 ) {
@@ -33,13 +33,13 @@ class QwenRepository(
     suspend fun ask(
         bitmap: Bitmap,
         prompt: String,
-        model: String = "qwen3.5-omni-flash",
+        model: String,
         maxSide: Int = 1280,
         quality: Int = 80,
     ): Result<String> = withContext(Dispatchers.IO) {
         val key = apiKeyProvider().trim()
         if (key.isEmpty()) return@withContext Result.failure(
-            IllegalStateException("尚未配置千问 API Key，请到设置中填入。")
+            IllegalStateException("尚未配置魔搭 API Key，请到设置中填入。")
         )
         val base64 = bitmap.toBase64Jpeg(quality = quality, maxSide = maxSide)
         val body = buildRequestBody(model, prompt, base64)
@@ -54,7 +54,7 @@ class QwenRepository(
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     return@withContext Result.failure(
-                        IOException("Qwen HTTP ${resp.code}: ${text.take(300)}")
+                        IOException("ModelScope HTTP ${resp.code}: ${text.take(300)}")
                     )
                 }
                 Result.success(parseAnswer(text))
@@ -64,11 +64,11 @@ class QwenRepository(
         }
     }
 
-    /** 拉取 DashScope（OpenAI 兼容模式）当前可用模型 id 列表。 */
+    /** 拉取魔搭推理服务当前可用模型 id 列表。 */
     suspend fun listModels(): Result<List<String>> = withContext(Dispatchers.IO) {
         val key = apiKeyProvider().trim()
         if (key.isEmpty()) return@withContext Result.failure(
-            IllegalStateException("尚未配置千问 API Key，请到设置中填入。")
+            IllegalStateException("尚未配置魔搭 API Key，请到设置中填入。")
         )
         val req = Request.Builder()
             .url(MODELS_ENDPOINT)
@@ -80,7 +80,7 @@ class QwenRepository(
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     return@withContext Result.failure(
-                        IOException("Qwen HTTP ${resp.code}: ${text.take(200)}")
+                        IOException("ModelScope HTTP ${resp.code}: ${text.take(200)}")
                     )
                 }
                 Result.success(parseModelIds(text))
@@ -98,63 +98,35 @@ class QwenRepository(
     private fun buildRequestBody(model: String, prompt: String, base64: String): JsonObject =
         buildJsonObject {
             put("model", model)
-            put("input", buildJsonObject {
-                put("messages", buildJsonArray {
-                    add(buildJsonObject {
-                        put("role", "user")
-                        put("content", buildJsonArray {
-                            add(buildJsonObject {
-                                put("image", "data:image/jpeg;base64,$base64")
+            put("messages", buildJsonArray {
+                add(buildJsonObject {
+                    put("role", "user")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject {
+                            put("type", "image_url")
+                            put("image_url", buildJsonObject {
+                                put("url", "data:image/jpeg;base64,$base64")
                             })
-                            add(buildJsonObject {
-                                put("text", prompt)
-                            })
+                        })
+                        add(buildJsonObject {
+                            put("type", "text")
+                            put("text", prompt)
                         })
                     })
                 })
-            })
-            put("parameters", buildJsonObject {
-                put("result_format", "message")
             })
         }
 
     private fun parseAnswer(raw: String): String {
         val root = json.parseToJsonElement(raw).jsonObject
-        val output = root["output"]?.jsonObject ?: return raw
-        val choices = output["choices"]?.jsonArray ?: return findTextDeep(output) ?: raw
-        val first = choices.firstOrNull()?.jsonObject ?: return raw
-        val message = first["message"]?.jsonObject ?: return raw
-        val content = message["content"] ?: return raw
-        return extractText(content)
-    }
-
-    private fun extractText(content: JsonElement): String = when (content) {
-        is JsonArray -> content.joinToString("\n") { item ->
-            when (item) {
-                is JsonObject -> item["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                else -> item.toString()
-            }
-        }.trim()
-        is JsonObject -> content["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
-        else -> content.jsonPrimitive.contentOrNull.orEmpty()
-    }
-
-    private fun findTextDeep(obj: JsonObject): String? {
-        obj["text"]?.jsonPrimitive?.contentOrNull?.let { return it }
-        for ((_, v) in obj) {
-            if (v is JsonObject) findTextDeep(v)?.let { return it }
-        }
-        return null
+        val choices = root["choices"]?.jsonArray ?: return raw
+        val message = choices.firstOrNull()?.jsonObject?.get("message")?.jsonObject ?: return raw
+        return message["content"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty().ifEmpty { raw }
     }
 
     companion object {
-        private const val ENDPOINT =
-            "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-        private const val MODELS_ENDPOINT =
-            "https://dashscope.aliyuncs.com/compatible-mode/v1/models"
+        private const val ENDPOINT = "https://api-inference.modelscope.cn/v1/chat/completions"
+        private const val MODELS_ENDPOINT = "https://api-inference.modelscope.cn/v1/models"
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }
 }
-
-@Serializable
-private data class QwenError(@SerialName("message") val message: String? = null)

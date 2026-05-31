@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import com.wangchaozhi.wechatassistant.data.model.Action
 import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Script
+import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -225,6 +226,7 @@ fun ScriptEditorScreen(
                     editingIndex = null
                     launchTemplatePicker()
                 },
+                fetchModels = { viewModel.fetchModels(it) },
             )
         }
 
@@ -569,6 +571,7 @@ internal fun EditActionDialog(
     onConfirm: (Action) -> Unit,
     onRecaptureTemplate: () -> Unit = {},
     onPickRegion: () -> Unit = {},
+    fetchModels: suspend (AiProvider) -> Result<List<String>> = { Result.success(it.models) },
 ) {
     var startX by remember { mutableStateOf(action.startX.toString()) }
     var startY by remember { mutableStateOf(action.startY.toString()) }
@@ -583,6 +586,9 @@ internal fun EditActionDialog(
     // IF_PAGE_CHANGED 复用 templatePath 存「快照B」名称。
     var snapshotB by remember { mutableStateOf(action.templatePath.orEmpty()) }
     var alias by remember { mutableStateOf(action.alias.orEmpty()) }
+    // AI 节点：供应商（null=跟随全局）与具体模型。
+    var aiProvider by remember { mutableStateOf(AiProvider.parse(action.aiProvider)) }
+    var aiModel by remember { mutableStateOf(action.aiModel.orEmpty()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -650,6 +656,18 @@ internal fun EditActionDialog(
                             Text(if (action.type == ActionType.AI_TAP) "目标描述" else "Prompt")
                         },
                         modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    AiProviderModelPicker(
+                        provider = aiProvider,
+                        model = aiModel,
+                        fetchModels = fetchModels,
+                        onProvider = { p ->
+                            aiProvider = p
+                            // 切到「跟随全局」时清空模型；选某供应商时若模型为空给个默认建议。
+                            aiModel = if (p == null) "" else aiModel.ifBlank { p.models.firstOrNull().orEmpty() }
+                        },
+                        onModel = { aiModel = it },
                     )
                 }
                 if (action.type == ActionType.SNAPSHOT) {
@@ -734,6 +752,8 @@ internal fun EditActionDialog(
                         templatePath = if (action.type == ActionType.IF_PAGE_CHANGED)
                             snapshotB.ifBlank { null } else action.templatePath,
                         alias = alias.ifBlank { null },
+                        aiProvider = aiProvider?.name,
+                        aiModel = if (aiProvider == null) null else aiModel.ifBlank { null },
                     )
                 )
             }) { Text("保存") }
@@ -756,4 +776,47 @@ private fun NumField(
         singleLine = true,
         modifier = modifier,
     )
+}
+
+/** AI 节点的「供应商 + 模型」选择器。provider 为 null 表示跟随全局设置。 */
+@Composable
+private fun AiProviderModelPicker(
+    provider: AiProvider?,
+    model: String,
+    fetchModels: suspend (AiProvider) -> Result<List<String>>,
+    onProvider: (AiProvider?) -> Unit,
+    onModel: (String) -> Unit,
+) {
+    var providerMenu by remember { mutableStateOf(false) }
+
+    Box(modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = { providerMenu = true }, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                Text("模型供应商", style = MaterialTheme.typography.labelMedium)
+                Text(provider?.label ?: "跟随全局设置", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        DropdownMenu(expanded = providerMenu, onDismissRequest = { providerMenu = false }) {
+            DropdownMenuItem(
+                text = { Text("跟随全局设置") },
+                onClick = { onProvider(null); providerMenu = false },
+            )
+            AiProvider.entries.forEach { p ->
+                DropdownMenuItem(
+                    text = { Text(p.label) },
+                    onClick = { onProvider(p); providerMenu = false },
+                )
+            }
+        }
+    }
+
+    if (provider != null) {
+        Spacer(Modifier.height(6.dp))
+        RefreshableModelField(
+            model = model,
+            onModel = onModel,
+            fetch = { fetchModels(provider) },
+            fallback = provider.models,
+        )
+    }
 }

@@ -5,18 +5,22 @@ import android.graphics.Bitmap
 import android.graphics.PointF
 import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
-import com.wangchaozhi.wechatassistant.feature.qwen.QwenRepository
 import com.wangchaozhi.wechatassistant.service.ServiceBus
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
 class AiTapUseCase(
     private val context: Context,
-    private val qwen: QwenRepository,
+    private val vision: VisionAiRepository,
     private val history: AiAnswerRepository,
 ) {
 
-    suspend fun locate(targetDescription: String, scriptId: Long? = null): Result<PointF> {
+    suspend fun locate(
+        targetDescription: String,
+        scriptId: Long? = null,
+        provider: String? = null,
+        model: String? = null,
+    ): Result<PointF> {
         if (!ServiceBus.captureReady.value) {
             return Result.failure(IllegalStateException("截图服务未启动。"))
         }
@@ -26,9 +30,8 @@ class AiTapUseCase(
             ServiceBus.lastBitmap.first { it != null }!!
         } ?: return Result.failure(IllegalStateException("截图超时。"))
 
-        val model = App.from(context).settingsRepo.qwenModel
         val prompt = buildPrompt(targetDescription, bitmap.width, bitmap.height)
-        val raw = qwen.ask(bitmap, prompt, model, maxSide = Int.MAX_VALUE)
+        val raw = vision.ask(bitmap, prompt, provider, model, maxSide = Int.MAX_VALUE)
             .getOrElse { return Result.failure(it) }
 
         runCatching { history.save(bitmap, prompt, raw, scriptId) }

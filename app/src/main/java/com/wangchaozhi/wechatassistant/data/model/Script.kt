@@ -60,6 +60,10 @@ data class Action(
     val posY: Float = 0f,
     // 节点别名：用户给节点起的可读名字，仅用于编辑器显示，不影响执行。
     val alias: String? = null,
+    // AI 节点专用：模型供应商（AiProvider.name，如 "DASHSCOPE"/"MODELSCOPE"）与具体模型名。
+    // 为 null 表示跟随全局设置。
+    val aiProvider: String? = null,
+    val aiModel: String? = null,
 )
 
 data class ScriptWithActions(

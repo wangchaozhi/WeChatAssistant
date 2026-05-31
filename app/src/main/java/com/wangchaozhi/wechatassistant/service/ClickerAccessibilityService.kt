@@ -166,6 +166,10 @@ class ClickerAccessibilityService : AccessibilityService() {
             val node = nodes[current] ?: continue
             ServiceBus.playerState.value =
                 ServiceBus.PlayerState.Playing(script, visited++, nodes.size)
+            // 「执行前等待」对所有节点生效：快照/条件前可借此等页面加载稳定再截图/比较。
+            if (node.delayBeforeMs > 0) {
+                delay((node.delayBeforeMs / script.speed).toLong().coerceAtLeast(0))
+            }
             val port = when (node.type) {
                 ActionType.START -> 0
                 ActionType.SNAPSHOT -> {
@@ -178,6 +182,12 @@ class ClickerAccessibilityService : AccessibilityService() {
                         regionBmps.remove(key)?.recycle()
                         regionBmps[key] = bmp
                         baselines.remove(key)
+                        // 调试：把区域图存盘，便于 adb 拉出来肉眼对比。
+                        runCatching {
+                            java.io.File(filesDir, "dbg_snap_$key.png").outputStream().use {
+                                bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                            }
+                        }
                         App.from(this@ClickerAccessibilityService)
                             .appendLog("SNAPSHOT[$key]=img ${bmp.width}x${bmp.height} region=$region")
                     } else {
@@ -231,9 +241,6 @@ class ClickerAccessibilityService : AccessibilityService() {
                     if (changed) 0 else 1
                 }
                 else -> {
-                    if (node.delayBeforeMs > 0) {
-                        delay((node.delayBeforeMs / script.speed).toLong().coerceAtLeast(0))
-                    }
                     execute(node, ai, tap, scriptId)
                     0
                 }
@@ -319,11 +326,11 @@ class ClickerAccessibilityService : AccessibilityService() {
             ActionType.SCREENSHOT_AI -> {
                 val prompt = action.aiPrompt
                     ?: App.from(this@ClickerAccessibilityService).settingsRepo.defaultPrompt
-                ai.run(prompt, scriptId).onFailure { /* swallow */ }
+                ai.run(prompt, scriptId, action.aiProvider, action.aiModel).onFailure { /* swallow */ }
             }
             ActionType.AI_TAP -> {
                 val target = action.aiPrompt ?: return
-                val result = tap.locate(target, scriptId)
+                val result = tap.locate(target, scriptId, action.aiProvider, action.aiModel)
                 val point = result.getOrNull()
                 App.from(this@ClickerAccessibilityService).appendLog(
                     "AITAP exec point=$point err=${result.exceptionOrNull()?.message}"
