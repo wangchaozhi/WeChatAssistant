@@ -5,22 +5,27 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.WindowManager
-import com.wangchaozhi.wechatassistant.util.ShizukuManager
+import com.flyfishxu.kadb.shell.AdbShellPacket
+import com.flyfishxu.kadb.shell.AdbShellStream
+import com.wangchaozhi.wechatassistant.util.WifiAdbManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.nio.charset.Charset
 
 /**
- * 通过 Shizuku 启动 `getevent -lt`，解析多点触控协议得到每根手指完整的 down/move/up 序列，
+ * 通过 Wi-Fi ADB 启动 `getevent -lt`，解析多点触控协议得到每根手指完整的 down/move/up 序列，
  * 转成 [ServiceBus.RawTouch] 发到 [ServiceBus.recordedTap]。
  * 单实例，调用方负责生命周期。
  */
-class ShizukuTouchReader(private val context: Context) {
+class WifiAdbTouchReader(private val context: Context) {
 
     private var job: Job? = null
-    private var process: Process? = null
+    private var shell: AdbShellStream? = null
 
     private data class TouchscreenInfo(
         val devicePath: String,
@@ -37,31 +42,40 @@ class ShizukuTouchReader(private val context: Context) {
                 return@launch
             }
             Log.i(TAG, "start getevent devices=${devices.joinToString { it.devicePath }}")
-            val cmd = arrayOf("sh", "-c", "exec getevent -lt")
-            val proc = ShizukuManager.newProcess(cmd)
-            if (proc == null) {
-                withContext(Dispatchers.Main) { onError("Shizuku 无法启动 getevent") }
+            val stream = WifiAdbManager.openShell("getevent -lt").getOrNull()
+            if (stream == null) {
+                withContext(Dispatchers.Main) { onError("Wi-Fi ADB 无法启动 getevent") }
                 return@launch
             }
-            process = proc
+            shell = stream
             try {
-                runReader(proc, devices)
-                withContext(Dispatchers.Main) { onError("Shizuku 录制进程已退出") }
+                runReader(stream, devices)
+                withContext(Dispatchers.Main) { onError("Wi-Fi ADB 录制进程已退出") }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // 连接断开时 kadb 的 stream.read() 会抛异常，不能让它崩掉整个 App
+                Log.w(TAG, "reader stopped", e)
+                if (isActive) {
+                    withContext(Dispatchers.Main) {
+                        onError("Wi-Fi ADB 连接已断开：${e.message ?: e.javaClass.simpleName}")
+                    }
+                }
             } finally {
-                runCatching { proc.destroy() }
-                if (process === proc) process = null
+                runCatching { stream.close() }
+                if (shell === stream) shell = null
             }
         }
     }
 
     fun stop() {
-        runCatching { process?.destroy() }
-        process = null
+        runCatching { shell?.close() }
+        shell = null
         job?.cancel()
         job = null
     }
 
-    private fun runReader(proc: Process, devices: List<TouchscreenInfo>) {
+    private fun runReader(stream: AdbShellStream, devices: List<TouchscreenInfo>) {
         val screenW: Int
         val screenH: Int
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -119,11 +133,12 @@ class ShizukuTouchReader(private val context: Context) {
             ServiceBus.recordedTap.tryEmit(raw)
         }
 
-        proc.inputStream.bufferedReader().useLines { lines ->
-            for (line in lines) {
-                val parsed = parseLine(line, defaultDevice.devicePath) ?: continue
+        streamLines(stream) { line ->
+            val parsed = parseLine(line, defaultDevice.devicePath)
+            if (parsed != null) {
                 val path = parsed.devicePath
-                val device = deviceByPath[path] ?: continue
+                val device = deviceByPath[path]
+                if (device != null) {
                 when (val ev = parsed.event) {
                     is Event.Slot -> deviceState(path).currentSlot = ev.index.coerceAtLeast(0)
                     is Event.TrackingId -> {
@@ -154,6 +169,31 @@ class ShizukuTouchReader(private val context: Context) {
                         }
                     }
                 }
+                }
+            }
+        }
+    }
+
+    private inline fun streamLines(stream: AdbShellStream, onLine: (String) -> Unit) {
+        val charset = Charset.defaultCharset()
+        val pending = StringBuilder()
+        while (true) {
+            when (val packet = stream.read()) {
+                is AdbShellPacket.StdOut -> {
+                    pending.append(packet.payload.toString(charset))
+                    while (true) {
+                        val i = pending.indexOf("\n")
+                        if (i < 0) break
+                        val line = pending.substring(0, i).trimEnd('\r')
+                        pending.delete(0, i + 1)
+                        onLine(line)
+                    }
+                }
+                is AdbShellPacket.Exit -> {
+                    if (pending.isNotEmpty()) onLine(pending.toString())
+                    return
+                }
+                is AdbShellPacket.StdError -> Unit
             }
         }
     }
@@ -196,8 +236,7 @@ class ShizukuTouchReader(private val context: Context) {
     }
 
     private suspend fun probeTouchscreens(): List<TouchscreenInfo> = withContext(Dispatchers.IO) {
-        val proc = ShizukuManager.newProcess(arrayOf("sh", "-c", "getevent -lp")) ?: return@withContext null
-        val text = try { proc.inputStream.bufferedReader().readText() } finally { runCatching { proc.destroy() } }
+        val text = WifiAdbManager.shell("getevent -lp").getOrNull() ?: return@withContext null
         parseProbe(text)
     }.orEmpty()
 
@@ -234,6 +273,6 @@ class ShizukuTouchReader(private val context: Context) {
     }
 
     companion object {
-        private const val TAG = "ShizukuTouchReader"
+        private const val TAG = "WifiAdbTouchReader"
     }
 }

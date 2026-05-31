@@ -15,7 +15,7 @@ import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
 import com.wangchaozhi.wechatassistant.feature.ai.VisionAiRepository
 import com.wangchaozhi.wechatassistant.service.ServiceBus
-import com.wangchaozhi.wechatassistant.util.ShizukuManager
+import com.wangchaozhi.wechatassistant.util.WifiAdbManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -94,13 +94,27 @@ class MainViewModel(
         get() = settings.aiImageMaxSide
         set(value) { settings.aiImageMaxSide = value }
 
-    val shizukuState: StateFlow<ShizukuManager.Status> = ShizukuManager.state
+    val wifiAdbState: StateFlow<WifiAdbManager.Status> = WifiAdbManager.state
 
-    fun requestShizukuPermission() {
-        viewModelScope.launch { ShizukuManager.requestPermission() }
+    fun saveWifiAdbConfig(host: String, pairingPort: Int, connectPort: Int) {
+        WifiAdbManager.saveConfig(host, pairingPort, connectPort)
     }
 
-    fun refreshShizuku() { ShizukuManager.refresh() }
+    fun pairWifiAdb(pairingCode: String) {
+        viewModelScope.launch { WifiAdbManager.pair(pairingCode) }
+    }
+
+    fun connectWifiAdb() {
+        viewModelScope.launch { WifiAdbManager.connect() }
+    }
+
+    fun pairAndConnectWifiAdb(pairingCode: String) {
+        viewModelScope.launch { WifiAdbManager.pairAndConnectAuto(pairingCode) }
+    }
+
+    fun disconnectWifiAdb() { WifiAdbManager.disconnect() }
+
+    fun refreshWifiAdb() { WifiAdbManager.refresh() }
 
     fun play(scriptId: Long) {
         viewModelScope.launch { ServiceBus.playerCmd.emit(ServiceBus.PlayerCmd.Play(scriptId)) }

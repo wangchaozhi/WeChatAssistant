@@ -36,7 +36,7 @@ import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.ui.MainActivity
-import com.wangchaozhi.wechatassistant.util.ShizukuManager
+import com.wangchaozhi.wechatassistant.util.WifiAdbManager
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -74,7 +74,7 @@ class OverlayService : LifecycleService() {
     private var panelContent: View? = null
     private var collapsedHandle: View? = null
     private var collapsed = false
-    private val shizukuReader by lazy { ShizukuTouchReader(this) }
+    private val adbReader by lazy { WifiAdbTouchReader(this) }
 
     override fun onCreate() {
         super.onCreate()
@@ -639,14 +639,9 @@ class OverlayService : LifecycleService() {
 
     private fun toggleRecording(btn: Button) {
         if (!recording) {
-            ShizukuManager.refresh()
-            val shizuku = ShizukuManager.state.value
-            if (!shizuku.available) {
-                Toast.makeText(this, "请先启动 Shizuku 后再录制", Toast.LENGTH_SHORT).show()
-                return
-            }
-            if (!shizuku.granted) {
-                Toast.makeText(this, "请先在设置中授权 Shizuku", Toast.LENGTH_SHORT).show()
+            WifiAdbManager.refresh()
+            if (!WifiAdbManager.state.value.connected) {
+                Toast.makeText(this, "请先在设置中连接 Wi-Fi ADB 后再录制", Toast.LENGTH_SHORT).show()
                 return
             }
             recording = true
@@ -656,13 +651,13 @@ class OverlayService : LifecycleService() {
             recordedTemplates.clear()
             btn.text = "完成"
             ServiceBus.recordingMode.value = true
-            ServiceBus.shizukuRecording.value = true
-            shizukuReader.start(lifecycleScope) { message ->
+            ServiceBus.adbRecording.value = true
+            adbReader.start(lifecycleScope) { message ->
                 if (recording && recordedTouches.isEmpty()) {
                     recording = false
                     btn.text = "录制"
                     ServiceBus.recordingMode.value = false
-                    ServiceBus.shizukuRecording.value = false
+                    ServiceBus.adbRecording.value = false
                     refreshStatus()
                 }
                 Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
@@ -672,8 +667,8 @@ class OverlayService : LifecycleService() {
             recording = false
             btn.text = "录制"
             ServiceBus.recordingMode.value = false
-            ServiceBus.shizukuRecording.value = false
-            shizukuReader.stop()
+            ServiceBus.adbRecording.value = false
+            adbReader.stop()
             ServiceBus.overlayCmd.tryEmit(ServiceBus.OverlayCmd.StopRecording)
             persistRecording()
         }
@@ -977,7 +972,7 @@ class OverlayService : LifecycleService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        shizukuReader.stop()
+        adbReader.stop()
         ServiceBus.overlayReady.value = false
         ServiceBus.recordingMode.value = false
         removeCropOverlay()

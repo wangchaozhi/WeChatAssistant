@@ -14,7 +14,7 @@ import com.wangchaozhi.wechatassistant.feature.ai.ModelScopeRepository
 import com.wangchaozhi.wechatassistant.feature.ai.ScreenshotAiUseCase
 import com.wangchaozhi.wechatassistant.feature.ai.VisionAiRepository
 import com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
-import com.wangchaozhi.wechatassistant.util.ShizukuManager
+import com.wangchaozhi.wechatassistant.util.WifiAdbManager
 import com.wangchaozhi.wechatassistant.feature.qwen.QwenRepository
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -100,7 +100,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         registerNotificationChannels()
-        runCatching { ShizukuManager.install() }
+        runCatching { WifiAdbManager.install(this, settingsRepo) }
     }
 
     private fun registerNotificationChannels() {
@@ -119,11 +119,19 @@ class App : Application() {
                 NotificationManager.IMPORTANCE_MIN,
             )
         )
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ADB,
+                getString(R.string.channel_adb_name),
+                NotificationManager.IMPORTANCE_DEFAULT,
+            )
+        )
     }
 
     companion object {
         const val CHANNEL_CAPTURE = "ch_capture"
         const val CHANNEL_OVERLAY = "ch_overlay"
+        const val CHANNEL_ADB = "ch_adb"
 
         fun from(ctx: Context): App = ctx.applicationContext as App
     }

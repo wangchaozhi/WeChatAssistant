@@ -51,7 +51,7 @@ object ServiceBus {
     val enterResult = MutableSharedFlow<Boolean>(extraBufferCapacity = 4)
 
     val recordingMode = MutableStateFlow(false)
-    val shizukuRecording = MutableStateFlow(false)
+    val adbRecording = MutableStateFlow(false)
     val recordedTap = MutableSharedFlow<RawTouch>(extraBufferCapacity = 64)
 
     enum class RawTouchSource {

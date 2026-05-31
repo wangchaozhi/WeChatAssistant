@@ -263,7 +263,7 @@ private fun MainScreen(
                     Column {
                         Text("连点助手", fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Shizuku 录制 · 无障碍回放",
+                            "Wi-Fi ADB 录制 · 无障碍回放",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -576,7 +576,7 @@ private fun PlayerStatusCard(
                     }
                 }
             } else {
-                Text("悬浮面板启动后，可在任意应用中录制 Shizuku 手势并回放。")
+                Text("悬浮面板启动后，可在任意应用中录制 Wi-Fi ADB 手势并回放。")
             }
             if (!lastAnswer.isNullOrBlank()) {
                 HorizontalDivider()

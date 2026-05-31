@@ -1,5 +1,7 @@
 package com.wangchaozhi.wechatassistant.ui
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,9 +51,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
+import com.wangchaozhi.wechatassistant.service.CaptureForegroundService
+import com.wangchaozhi.wechatassistant.service.ServiceBus
+import com.wangchaozhi.wechatassistant.util.WifiAdbNotification
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -124,7 +130,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onSide = { thumbSide = it; viewModel.thumbnailMaxSide = it },
                 )
             }
-            item { ShizukuCard(viewModel) }
+            item { WifiAdbCard(viewModel) }
         }
     }
 }
@@ -404,16 +410,17 @@ private val AI_IMAGE_PRESETS = listOf(
 )
 
 @Composable
-fun ShizukuCard(viewModel: MainViewModel) {
-    val state by viewModel.shizukuState.collectAsState()
+fun WifiAdbCard(viewModel: MainViewModel) {
+    val context = LocalContext.current
+    val state by viewModel.wifiAdbState.collectAsState()
     var showHelp by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { viewModel.refreshShizuku() }
+    LaunchedEffect(Unit) { viewModel.refreshWifiAdb() }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (state.granted) {
+            containerColor = if (state.connected) {
                 MaterialTheme.colorScheme.primaryContainer
             } else {
                 MaterialTheme.colorScheme.surface
@@ -422,16 +429,17 @@ fun ShizukuCard(viewModel: MainViewModel) {
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             val statusText = when {
-                !state.available -> "未启动（请先在 Shizuku App 中通过无线调试启动）"
-                !state.granted -> "已就绪，但未授权本应用"
-                else -> "已连接 · 已授权"
+                state.busy -> state.message.ifBlank { "处理中..." }
+                state.connected -> "已连接 ${state.host}:${state.connectPort}"
+                state.message.isNotBlank() -> state.message
+                else -> "未连接（使用系统无线调试配对/连接）"
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                SettingsIcon(if (state.granted) Icons.Filled.Security else Icons.Filled.Link)
+                SettingsIcon(if (state.connected) Icons.Filled.Security else Icons.Filled.Link)
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Shizuku 高级录制",
+                        "Wi-Fi ADB 高级录制",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -439,23 +447,40 @@ fun ShizukuCard(viewModel: MainViewModel) {
                 }
             }
             Text(
-                "录制功能仅使用 Shizuku 高级录制，可记录图标点击、游戏画布、自定义控件、长按与滑动。",
+                "录制功能通过无线调试 ADB 执行 getevent，可记录图标点击、游戏画布、自定义控件、长按与滑动。",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (state.available && !state.granted) {
-                    Button(onClick = viewModel::requestShizukuPermission, shape = RoundedCornerShape(8.dp)) {
-                        Icon(Icons.Filled.Security, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("授权")
-                    }
+                Button(
+                    onClick = {
+                        // 截屏前台服务会占用通知，先停掉再弹通知，避免被覆盖
+                        if (ServiceBus.captureReady.value) {
+                            CaptureForegroundService.stop(context)
+                        }
+                        WifiAdbNotification.show(context)
+                        // 顺手打开开发者选项，方便用户进入「无线调试」拿配对码
+                        runCatching {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                    },
+                    enabled = !state.busy,
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Icon(Icons.Filled.Security, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("通知配对")
                 }
-                OutlinedButton(onClick = viewModel::refreshShizuku, shape = RoundedCornerShape(8.dp)) {
+                OutlinedButton(onClick = viewModel::refreshWifiAdb, shape = RoundedCornerShape(8.dp)) {
                     Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("刷新")
                 }
-                TextButton(onClick = { showHelp = true }) { Text("无线调试启动") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { showHelp = true }) { Text("怎么填") }
             }
         }
     }
@@ -464,17 +489,16 @@ fun ShizukuCard(viewModel: MainViewModel) {
         AlertDialog(
             shape = RoundedCornerShape(8.dp),
             onDismissRequest = { showHelp = false },
-            title = { Text("用无线调试启动 Shizuku（无需电脑）") },
+            title = { Text("连接 Wi-Fi ADB") },
             text = {
                 Column {
                     Text(
-                        "前置：Android 11+；先在应用商店或 GitHub 装好「Shizuku」App。\n\n" +
+                        "前置：Android 11+，并打开开发者选项里的「无线调试」。\n\n" +
                         "1. 系统设置 → 关于手机 → 连点 7 次「版本号」打开开发者模式\n" +
-                        "2. 开发者选项 → 打开「无线调试」并保持页面停留\n" +
-                        "3. 进入 Shizuku App → 选「通过无线调试启动」\n" +
-                        "4. 按 Shizuku 提示操作（部分机型需用「使用配对码配对设备」的端口和配对码）\n" +
-                        "5. 启动成功后回到本应用，点上方「刷新状态」→「授权本应用」\n\n" +
-                        "重启手机后 Shizuku 会失效，按上述步骤再启动一次即可。",
+                        "2. 点「通知配对」：会发出一条通知并自动跳到开发者选项\n" +
+                        "3. 开发者选项 → 打开「无线调试」→「使用配对码配对设备」\n" +
+                        "4. 保持配对弹窗打开，下拉通知点「输入配对码」回复 6 位配对码，端口会自动查找并连接\n\n" +
+                        "一般不需要手动填写端口；如果自动连接失败，再检查无线调试是否保持开启。",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }

@@ -175,8 +175,8 @@ class ClickerAccessibilityService : AccessibilityService() {
                 ActionType.SNAPSHOT -> {
                     val key = node.aiPrompt?.ifBlank { null } ?: "默认"
                     val region = regionOf(node)
-                    // 有范围且截图就绪 → 存区域截图（OpenCV 比较）；否则存文字指纹。
-                    val bmp = if (region != null && ServiceBus.captureReady.value)
+                    // 截图就绪时存截图做 OpenCV 比较；region=null 表示整屏。
+                    val bmp = if (ServiceBus.captureReady.value)
                         regionCrop(region) else null
                     if (bmp != null) {
                         regionBmps.remove(key)?.recycle()

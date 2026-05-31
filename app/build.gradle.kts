@@ -101,8 +101,7 @@ dependencies {
 
     implementation(libs.androidx.security.crypto)
 
-    implementation(libs.shizuku.api)
-    implementation(libs.shizuku.provider)
+    implementation(libs.kadb)
 
     implementation(libs.opencv)
 
