@@ -116,6 +116,16 @@ class MainViewModel(
 
     fun refreshWifiAdb() { WifiAdbManager.refresh() }
 
+    /** 未连接时用已保存的密钥重连（免重配对），已连接时仅核验。 */
+    fun reconnectWifiAdb() {
+        viewModelScope.launch {
+            WifiAdbManager.refresh()
+            if (!WifiAdbManager.state.value.connected) {
+                WifiAdbManager.reconnect()
+            }
+        }
+    }
+
     fun play(scriptId: Long) {
         viewModelScope.launch { ServiceBus.playerCmd.emit(ServiceBus.PlayerCmd.Play(scriptId)) }
     }

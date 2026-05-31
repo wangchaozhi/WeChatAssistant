@@ -466,21 +466,25 @@ fun WifiAdbCard(viewModel: MainViewModel) {
                             )
                         }
                     },
-                    enabled = !state.busy,
+                    enabled = !state.busy && !state.connected,
                     shape = RoundedCornerShape(8.dp),
                 ) {
                     Icon(Icons.Filled.Security, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("通知配对")
+                    Text(if (state.connected) "已连接" else "通知配对")
                 }
-                OutlinedButton(onClick = viewModel::refreshWifiAdb, shape = RoundedCornerShape(8.dp)) {
+                OutlinedButton(
+                    onClick = viewModel::reconnectWifiAdb,
+                    enabled = !state.busy,
+                    shape = RoundedCornerShape(8.dp),
+                ) {
                     Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("刷新")
+                    Text(if (state.connected) "刷新" else "重连")
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { showHelp = true }) { Text("怎么填") }
+                TextButton(onClick = { showHelp = true }) { Text("说明") }
             }
         }
     }
