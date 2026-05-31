@@ -641,7 +641,19 @@ class OverlayService : LifecycleService() {
         if (!recording) {
             WifiAdbManager.refresh()
             if (!WifiAdbManager.state.value.connected) {
-                Toast.makeText(this, "请先在设置中连接 Wi-Fi ADB 后再录制", Toast.LENGTH_SHORT).show()
+                // 配对过就用旧密钥自动重连，不必回设置页重输配对码
+                Toast.makeText(this, "正在自动连接 Wi-Fi ADB...", Toast.LENGTH_SHORT).show()
+                lifecycleScope.launch {
+                    if (WifiAdbManager.reconnect().isSuccess) {
+                        toggleRecording(btn)
+                    } else {
+                        Toast.makeText(
+                            this@OverlayService,
+                            "请先在设置中配对 Wi-Fi ADB 后再录制",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
                 return
             }
             recording = true

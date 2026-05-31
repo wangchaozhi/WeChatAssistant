@@ -6,11 +6,15 @@ import com.flyfishxu.kadb.Kadb
 import com.flyfishxu.kadb.cert.KadbCert
 import com.flyfishxu.kadb.cert.KadbCertPolicy
 import com.flyfishxu.kadb.cert.OkioFilePrivateKeyStore
+import com.flyfishxu.kadb.shell.AdbShellStream
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okio.FileSystem
 import okio.Path.Companion.toPath
@@ -21,6 +25,7 @@ object WifiAdbManager {
     private var settings: SettingsRepository? = null
     private var appContext: Context? = null
     private var client: Kadb? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _state = MutableStateFlow(Status())
     val state = _state.asStateFlow()
@@ -43,6 +48,7 @@ object WifiAdbManager {
             policy = KadbCertPolicy(),
         )
         refresh()
+        autoConnectIfPaired()
     }
 
     fun refresh() {
@@ -139,7 +145,6 @@ object WifiAdbManager {
         }
 
         setBusy("正在配对...")
-        var pairHost = ""
         var pairPort = 0
         var lastError: Throwable? = null
         for ((host, port) in pairCandidates) {
@@ -148,7 +153,6 @@ object WifiAdbManager {
                 Kadb.pair(host, port, pairingCode.trim())
             }.onFailure { lastError = it }.isSuccess
             if (ok) {
-                pairHost = host
                 pairPort = port
                 Log.i(TAG, "auto pair success host=$host port=$port")
                 break
@@ -159,16 +163,63 @@ object WifiAdbManager {
             return@withContext Result.failure(lastError ?: IllegalStateException("没有端口接受该配对码"))
         }
 
-        // 配对端口是一次性的，连接端口要重新发现。adbd 配对完后可能要一会儿才在连接端口起监听，
-        // mDNS 也可能先返回旧端口，所以带延迟重试，每轮重新发现，并始终保留回环兜底。
+        // 配对端口是一次性的，连接端口要重新发现。
+        _state.value = _state.value.copy(pairingPort = pairPort)
+        s.adbPairingPort = pairPort
         setBusy("配对成功，正在连接...")
-        repeat(CONNECT_ATTEMPTS) { round ->
-            // 网络上可能有多个 _adb-tls-connect 实例（僵尸旧端口 + 真实端口），全部收集逐个试
+        connectViaMdns(ctx, s, excludePort = pairPort)
+    }
+
+    /**
+     * 不重新配对，直接用已保存的密钥重连 connect 端口。
+     * 用于连接被对端（如系统省电策略）掐断后的自动恢复。
+     */
+    suspend fun reconnect(): Result<Unit> = withContext(Dispatchers.IO) {
+        val s = settings ?: return@withContext Result.failure(IllegalStateException("Wi-Fi ADB 未初始化"))
+        val ctx = appContext ?: return@withContext Result.failure(IllegalStateException("Wi-Fi ADB 未初始化"))
+        setBusy("连接断开，正在自动重连...")
+        connectViaMdns(ctx, s, preferPort = s.adbConnectPort)
+    }
+
+    /**
+     * 应用启动时：若之前配对过（密钥已存 + 有连接端口记录），用旧密钥静默自动连接，
+     * 无需再输配对码。无线调试没开/未授权则静默失败。
+     */
+    fun autoConnectIfPaired() {
+        val s = settings ?: return
+        val ctx = appContext ?: return
+        if (_state.value.connected) return
+        val keyFile = File(ctx.filesDir, "kadb_private_key.pem")
+        if (!keyFile.exists() || s.adbConnectPort <= 0) return // 没配对过，跳过
+        scope.launch {
+            Log.i(TAG, "auto-connect on start (paired before)")
+            // 启动时只快速试 2 轮，避免无线调试没开时长时间空跑
+            runCatching { connectViaMdns(ctx, s, preferPort = s.adbConnectPort, rounds = 2) }
+        }
+    }
+
+    /**
+     * 用 mDNS 发现的 connect 端口（+回环兜底）逐个尝试建立连接。带延迟重试。
+     * adbd 配对完后可能要一会儿才在连接端口起监听，mDNS 也可能先返回僵尸旧端口，
+     * 网络上还可能同时有多个 _adb-tls-connect 实例，所以全部收集逐个试。
+     */
+    private suspend fun connectViaMdns(
+        ctx: Context,
+        s: SettingsRepository,
+        excludePort: Int = 0,
+        preferPort: Int = 0,
+        rounds: Int = CONNECT_ATTEMPTS,
+    ): Result<Unit> {
+        var lastError: Throwable? = null
+        repeat(rounds) { round ->
             val services = AdbMdns.discoverAll(ctx, AdbMdns.TLS_CONNECT, gatherMs = 2500)
-            val ports = (services.map { it.port } +
-                listenPorts().filter { it in 30000..49999 && it != pairPort }).distinct()
-            val hosts = (services.map { it.host } + LOOPBACK + pairHost).distinct()
+            val ports = (listOfNotNull(preferPort.takeIf { it in 30000..49999 }) +
+                services.map { it.port } +
+                listenPorts().filter { it in 30000..49999 })
+                .filter { it != excludePort }
+                .distinct()
             // 自己连自己优先走回环，避开 Wi-Fi 局域网 IP 的 hairpin（更稳，部分 ROM 会掐）
+            val hosts = (listOf(LOOPBACK) + services.map { it.host } + s.adbHost).distinct()
             val candidates = ports.flatMap { port -> hosts.map { host -> host to port } }
                 .sortedBy { it.first != LOOPBACK }
                 .distinct()
@@ -184,24 +235,22 @@ object WifiAdbManager {
                 }.onFailure { lastError = it; Log.w(TAG, "connect attempt failed host=$host port=$port: ${it.message}") }.isSuccess
                 if (ok) {
                     s.adbHost = host
-                    s.adbPairingPort = pairPort
                     s.adbConnectPort = port
                     _state.value = _state.value.copy(
                         host = host,
-                        pairingPort = pairPort,
                         connectPort = port,
                         connected = true,
                         busy = false,
-                        message = "已自动连接 Wi-Fi ADB",
+                        message = "已连接 Wi-Fi ADB",
                     )
-                    Log.i(TAG, "auto connect success host=$host port=$port")
-                    return@withContext Result.success(Unit)
+                    Log.i(TAG, "connect success host=$host port=$port")
+                    return Result.success(Unit)
                 }
             }
-            if (round < CONNECT_ATTEMPTS - 1) delay(800)
+            if (round < rounds - 1) delay(800)
         }
         _state.value = _state.value.copy(connected = false, busy = false)
-        Result.failure(lastError ?: IllegalStateException("配对成功，但未找到可用连接端口"))
+        return Result.failure(lastError ?: IllegalStateException("未找到可用连接端口"))
     }
 
     fun disconnect() {
@@ -222,6 +271,29 @@ object WifiAdbManager {
     }
 
     fun openShell(command: String) = runCatching { requireClient().openShell(command) }
+
+    /**
+     * 一条独立、用完即弃的连接上的 shell（如长跑的 getevent）。
+     * 关闭长流会把所在的 kadb 连接弄坏，放在独立连接里就不会污染主连接（探测/校验仍可用）。
+     * 调用方负责在结束时 [DedicatedShell.close]。
+     */
+    class DedicatedShell(private val kadb: Kadb, val stream: AdbShellStream) {
+        fun close() {
+            runCatching { stream.close() }
+            runCatching { kadb.close() }
+        }
+    }
+
+    fun openDedicatedShell(command: String): DedicatedShell? {
+        val s = settings ?: return null
+        val host = s.adbHost.ifBlank { SettingsRepository.DEFAULT_ADB_HOST }
+        val port = s.adbConnectPort
+        if (port <= 0) return null
+        return runCatching {
+            val kadb = Kadb.create(host, port)
+            DedicatedShell(kadb, kadb.openShell(command))
+        }.getOrNull()
+    }
 
     private fun requireClient(): Kadb {
         val adb = client ?: error("请先在设置中连接 Wi-Fi ADB")
