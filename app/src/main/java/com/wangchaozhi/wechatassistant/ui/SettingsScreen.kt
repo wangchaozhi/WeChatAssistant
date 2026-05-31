@@ -96,14 +96,14 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 DefaultProviderCard(
                     provider = defaultProvider,
                     onProvider = { defaultProvider = it; viewModel.defaultAiProvider = it },
+                    prompt = prompt,
+                    onPrompt = { prompt = it; viewModel.defaultPrompt = it },
                 )
             }
             item {
                 QwenCard(
                     apiKey = apiKey,
                     onApiKey = { apiKey = it; viewModel.apiKey = it },
-                    prompt = prompt,
-                    onPrompt = { prompt = it; viewModel.defaultPrompt = it },
                     model = model,
                     onModel = { model = it; viewModel.qwenModel = it },
                     fetchModels = { viewModel.fetchModels(AiProvider.DASHSCOPE) },
@@ -139,8 +139,6 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
 private fun QwenCard(
     apiKey: String,
     onApiKey: (String) -> Unit,
-    prompt: String,
-    onPrompt: (String) -> Unit,
     model: String,
     onModel: (String) -> Unit,
     fetchModels: suspend () -> Result<List<String>>,
@@ -178,18 +176,17 @@ private fun QwenCard(
                 fallback = AiProvider.DASHSCOPE_MODELS,
                 label = "多模态模型",
             )
-            OutlinedTextField(
-                value = prompt,
-                onValueChange = onPrompt,
-                label = { Text("默认 Prompt") },
-                modifier = Modifier.fillMaxWidth(),
-            )
         }
     }
 }
 
 @Composable
-private fun DefaultProviderCard(provider: String, onProvider: (String) -> Unit) {
+private fun DefaultProviderCard(
+    provider: String,
+    onProvider: (String) -> Unit,
+    prompt: String,
+    onPrompt: (String) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     val current = AiProvider.parse(provider) ?: AiProvider.DASHSCOPE
     Card(
@@ -235,6 +232,12 @@ private fun DefaultProviderCard(provider: String, onProvider: (String) -> Unit) 
                     }
                 }
             }
+            OutlinedTextField(
+                value = prompt,
+                onValueChange = onPrompt,
+                label = { Text("默认 Prompt") },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
