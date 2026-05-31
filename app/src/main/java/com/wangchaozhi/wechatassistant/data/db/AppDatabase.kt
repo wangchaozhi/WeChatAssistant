@@ -19,7 +19,7 @@ class Converters {
 
 @Database(
     entities = [Script::class, Action::class, AiAnswer::class, Edge::class],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -40,6 +40,14 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE actions ADD COLUMN aiProvider TEXT")
                 db.execSQL("ALTER TABLE actions ADD COLUMN aiModel TEXT")
+            }
+        }
+
+        // AI 历史记录新增「供应商 / 模型」两列，保留已有历史。
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE ai_answers ADD COLUMN aiProvider TEXT")
+                db.execSQL("ALTER TABLE ai_answers ADD COLUMN aiModel TEXT")
             }
         }
     }

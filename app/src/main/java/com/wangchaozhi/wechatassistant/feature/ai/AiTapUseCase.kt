@@ -31,10 +31,11 @@ class AiTapUseCase(
         } ?: return Result.failure(IllegalStateException("截图超时。"))
 
         val prompt = buildPrompt(targetDescription, bitmap.width, bitmap.height)
+        val (usedProvider, usedModel) = vision.resolve(provider, model)
         val raw = vision.ask(bitmap, prompt, provider, model, maxSide = Int.MAX_VALUE)
             .getOrElse { return Result.failure(it) }
 
-        runCatching { history.save(bitmap, prompt, raw, scriptId) }
+        runCatching { history.save(bitmap, prompt, raw, scriptId, usedProvider.name, usedModel) }
 
         val point = parseCoords(raw, bitmap.width, bitmap.height)
         App.from(context).appendLog(

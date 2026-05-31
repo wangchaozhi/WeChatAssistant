@@ -43,11 +43,14 @@ class ScreenshotAiUseCase(
         val maxSide = settings.aiImageMaxSide
         val quality = qualityFor(maxSide)
         val effective = prompt.ifBlank { settings.defaultPrompt }
+        val (usedProvider, usedModel) = vision.resolve(provider, model)
         val result = vision.ask(bitmap, effective, provider, model, maxSide = maxSide, quality = quality)
         result.onSuccess { answer ->
             context.copyToClipboard(answer)
             ServiceBus.lastAiAnswer.value = answer
-            runCatching { history.save(bitmap, effective, answer, scriptId) }
+            runCatching {
+                history.save(bitmap, effective, answer, scriptId, usedProvider.name, usedModel)
+            }
         }
         return result
     }

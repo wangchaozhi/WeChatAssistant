@@ -21,6 +21,16 @@ class VisionAiRepository(
         AiProvider.MODELSCOPE -> modelScope.listModels()
     }
 
+    /** 把节点指定（可空）的供应商/模型解析成实际生效的一对，便于调用与历史记录。 */
+    fun resolve(providerName: String?, modelName: String?): Pair<AiProvider, String> {
+        val provider = AiProvider.parse(providerName) ?: defaultProvider()
+        val model = modelName?.ifBlank { null } ?: when (provider) {
+            AiProvider.DASHSCOPE -> defaultDashScopeModel()
+            AiProvider.MODELSCOPE -> defaultModelScopeModel()
+        }
+        return provider to model
+    }
+
     suspend fun ask(
         bitmap: Bitmap,
         prompt: String,
@@ -29,16 +39,10 @@ class VisionAiRepository(
         maxSide: Int = 1280,
         quality: Int = 80,
     ): Result<String> {
-        val provider = AiProvider.parse(providerName) ?: defaultProvider()
+        val (provider, model) = resolve(providerName, modelName)
         return when (provider) {
-            AiProvider.DASHSCOPE -> {
-                val model = modelName?.ifBlank { null } ?: defaultDashScopeModel()
-                qwen.ask(bitmap, prompt, model, maxSide = maxSide, quality = quality)
-            }
-            AiProvider.MODELSCOPE -> {
-                val model = modelName?.ifBlank { null } ?: defaultModelScopeModel()
-                modelScope.ask(bitmap, prompt, model, maxSide = maxSide, quality = quality)
-            }
+            AiProvider.DASHSCOPE -> qwen.ask(bitmap, prompt, model, maxSide = maxSide, quality = quality)
+            AiProvider.MODELSCOPE -> modelScope.ask(bitmap, prompt, model, maxSide = maxSide, quality = quality)
         }
     }
 }

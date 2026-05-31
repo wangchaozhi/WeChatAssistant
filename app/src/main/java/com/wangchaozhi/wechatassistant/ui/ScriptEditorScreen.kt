@@ -663,9 +663,11 @@ internal fun EditActionDialog(
                         model = aiModel,
                         fetchModels = fetchModels,
                         onProvider = { p ->
+                            // 切换供应商时，模型名跟着切到新供应商的默认模型；「跟随全局」则清空。
+                            if (p != aiProvider) {
+                                aiModel = if (p == null) "" else p.models.firstOrNull().orEmpty()
+                            }
                             aiProvider = p
-                            // 切到「跟随全局」时清空模型；选某供应商时若模型为空给个默认建议。
-                            aiModel = if (p == null) "" else aiModel.ifBlank { p.models.firstOrNull().orEmpty() }
                         },
                         onModel = { aiModel = it },
                     )
@@ -817,6 +819,7 @@ private fun AiProviderModelPicker(
             onModel = onModel,
             fetch = { fetchModels(provider) },
             fallback = provider.models,
+            refreshKey = provider,
         )
     }
 }

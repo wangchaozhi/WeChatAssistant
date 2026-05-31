@@ -29,8 +29,8 @@ enum class AiProvider(val label: String) {
 
         // 魔搭社区推理服务（api-inference.modelscope.cn）上的模型，OpenAI 兼容。
         val MODELSCOPE_MODELS = listOf(
-            "Qwen/Qwen3.5-35B-A3B",
             "Qwen/Qwen3.5-122B-A10B",
+            "Qwen/Qwen3.5-35B-A3B",
         )
     }
 }
