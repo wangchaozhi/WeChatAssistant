@@ -12,6 +12,7 @@ val localProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 val qwenApiKey: String = localProps.getProperty("QWEN_API_KEY", "")
+val modelScopeApiKey: String = localProps.getProperty("MODELSCOPE_API_KEY", "")
 
 android {
     namespace = "com.wangchaozhi.wechatassistant"
@@ -31,6 +32,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "QWEN_API_KEY", "\"$qwenApiKey\"")
+        buildConfigField("String", "MODELSCOPE_API_KEY", "\"$modelScopeApiKey\"")
 
         // OpenCV 自带各 ABI 的 native 库，体积较大（x86_64 的 .so 就 ~53MB）。
         // 只保留真机用的 arm64-v8a；如需 x86_64 模拟器调试再临时加回。

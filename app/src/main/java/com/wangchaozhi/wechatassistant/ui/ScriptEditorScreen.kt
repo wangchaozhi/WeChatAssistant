@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import com.wangchaozhi.wechatassistant.data.model.Action
 import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Script
+import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -225,6 +226,7 @@ fun ScriptEditorScreen(
                     editingIndex = null
                     launchTemplatePicker()
                 },
+                fetchModels = { viewModel.fetchModels(it) },
             )
         }
 
@@ -263,7 +265,7 @@ fun ScriptEditorScreen(
     }
 }
 
-private fun decodeBitmap(context: android.content.Context, uri: android.net.Uri): android.graphics.Bitmap? =
+internal fun decodeBitmap(context: android.content.Context, uri: android.net.Uri): android.graphics.Bitmap? =
     runCatching {
         context.contentResolver.openInputStream(uri)?.use {
             android.graphics.BitmapFactory.decodeStream(it)
@@ -419,6 +421,10 @@ private fun AddActionMenu(
                 onClick = { onAddSimple(ActionType.ENTER); expanded = false },
             )
             DropdownMenuItem(
+                text = { Text("等待页面变化") },
+                onClick = { onAddSimple(ActionType.WAIT_PAGE_CHANGE); expanded = false },
+            )
+            DropdownMenuItem(
                 text = { Text("AI 步骤…") },
                 onClick = { onAddAi(); expanded = false },
             )
@@ -430,7 +436,7 @@ private fun AddActionMenu(
     }
 }
 
-private fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Action = when (type) {
+internal fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Action = when (type) {
     ActionType.TAP -> Action(
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 80L,
@@ -455,9 +461,21 @@ private fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Acti
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 0L,
     )
+    ActionType.WAIT_PAGE_CHANGE -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 800L, retryCount = 10,
+    )
+    ActionType.START -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L,
+    )
+    ActionType.SNAPSHOT, ActionType.IF_PAGE_CHANGED -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L, aiPrompt = "快照1",
+    )
 }
 
-private fun typeLabel(t: ActionType): String = when (t) {
+internal fun typeLabel(t: ActionType): String = when (t) {
     ActionType.TAP -> "点击"
     ActionType.SWIPE -> "滑动"
     ActionType.LONG_PRESS -> "长按"
@@ -467,6 +485,10 @@ private fun typeLabel(t: ActionType): String = when (t) {
     ActionType.IMAGE_MATCH -> "找图点击（模板）"
     ActionType.PASTE -> "粘贴"
     ActionType.ENTER -> "回车"
+    ActionType.WAIT_PAGE_CHANGE -> "等待页面变化"
+    ActionType.START -> "开始"
+    ActionType.SNAPSHOT -> "快照"
+    ActionType.IF_PAGE_CHANGED -> "条件：页面是否变化"
 }
 
 private fun describe(a: Action): String = when (a.type) {
@@ -481,6 +503,11 @@ private fun describe(a: Action): String = when (a.type) {
         "${if (a.templatePath != null) "找图点击" else "⚠ 未设模板"} · 阈值 ${"%.2f".format(a.matchThreshold)} · 延迟 ${a.delayBeforeMs}ms"
     ActionType.PASTE -> "粘贴到当前焦点输入框 · 延迟 ${a.delayBeforeMs}ms"
     ActionType.ENTER -> "回车 (IME action 或换行) · 延迟 ${a.delayBeforeMs}ms"
+    ActionType.WAIT_PAGE_CHANGE ->
+        "页面没变就重复前 ${a.repeatPrevSteps} 步 · 最多 ${a.retryCount} 次 · 间隔 ${a.durationMs}ms"
+    ActionType.START -> "图入口"
+    ActionType.SNAPSHOT -> "记录当前页面为基准"
+    ActionType.IF_PAGE_CHANGED -> "页面变了走「是」，否则走「否」"
 }
 
 @Composable
@@ -538,11 +565,13 @@ private fun AddAiStepDialog(
 }
 
 @Composable
-private fun EditActionDialog(
+internal fun EditActionDialog(
     action: Action,
     onDismiss: () -> Unit,
     onConfirm: (Action) -> Unit,
     onRecaptureTemplate: () -> Unit = {},
+    onPickRegion: () -> Unit = {},
+    fetchModels: suspend (AiProvider) -> Result<List<String>> = { Result.success(it.models) },
 ) {
     var startX by remember { mutableStateOf(action.startX.toString()) }
     var startY by remember { mutableStateOf(action.startY.toString()) }
@@ -552,6 +581,14 @@ private fun EditActionDialog(
     var delay by remember { mutableStateOf(action.delayBeforeMs.toString()) }
     var aiPrompt by remember { mutableStateOf(action.aiPrompt.orEmpty()) }
     var threshold by remember { mutableStateOf(action.matchThreshold.toString()) }
+    var retry by remember { mutableStateOf(action.retryCount.toString()) }
+    var repeatSteps by remember { mutableStateOf(action.repeatPrevSteps.toString()) }
+    // IF_PAGE_CHANGED 复用 templatePath 存「快照B」名称。
+    var snapshotB by remember { mutableStateOf(action.templatePath.orEmpty()) }
+    var alias by remember { mutableStateOf(action.alias.orEmpty()) }
+    // AI 节点：供应商（null=跟随全局）与具体模型。
+    var aiProvider by remember { mutableStateOf(AiProvider.parse(action.aiProvider)) }
+    var aiModel by remember { mutableStateOf(action.aiModel.orEmpty()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -559,6 +596,14 @@ private fun EditActionDialog(
         text = {
             Column {
                 AssistChip(onClick = {}, label = { Text("#${action.index + 1}  ${typeLabel(action.type)}") })
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = alias,
+                    onValueChange = { alias = it },
+                    label = { Text("别名（可选，仅用于显示）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Spacer(Modifier.height(8.dp))
                 when (action.type) {
                     ActionType.TAP, ActionType.LONG_PRESS -> {
@@ -579,18 +624,29 @@ private fun EditActionDialog(
                         }
                     }
                     ActionType.WAIT, ActionType.SCREENSHOT_AI, ActionType.AI_TAP,
-                    ActionType.IMAGE_MATCH, ActionType.PASTE, ActionType.ENTER -> { /* no coords */ }
+                    ActionType.IMAGE_MATCH, ActionType.PASTE, ActionType.ENTER,
+                    ActionType.WAIT_PAGE_CHANGE,
+                    ActionType.START, ActionType.SNAPSHOT, ActionType.IF_PAGE_CHANGED -> { /* no coords */ }
                 }
-                Spacer(Modifier.height(6.dp))
-                if (action.type != ActionType.SCREENSHOT_AI &&
-                    action.type != ActionType.IMAGE_MATCH &&
-                    action.type != ActionType.PASTE &&
-                    action.type != ActionType.ENTER
-                ) {
-                    NumField(duration, { duration = it }, "持续 (ms)", Modifier.fillMaxWidth())
+                if (action.type == ActionType.WAIT_PAGE_CHANGE) {
+                    Spacer(Modifier.height(6.dp))
+                    NumField(repeatSteps, { repeatSteps = it }, "每次重复执行的前几步 (如出去+进来=2)", Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    NumField(retry, { retry = it }, "页面未变最多重试次数", Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    NumField(duration, { duration = it }, "轮询间隔 (ms)", Modifier.fillMaxWidth())
+                } else {
+                    Spacer(Modifier.height(6.dp))
+                    if (action.type != ActionType.SCREENSHOT_AI &&
+                        action.type != ActionType.IMAGE_MATCH &&
+                        action.type != ActionType.PASTE &&
+                        action.type != ActionType.ENTER
+                    ) {
+                        NumField(duration, { duration = it }, "持续 (ms)", Modifier.fillMaxWidth())
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    NumField(delay, { delay = it }, "执行前等待 (ms)", Modifier.fillMaxWidth())
                 }
-                Spacer(Modifier.height(6.dp))
-                NumField(delay, { delay = it }, "执行前等待 (ms)", Modifier.fillMaxWidth())
                 if (action.type == ActionType.SCREENSHOT_AI || action.type == ActionType.AI_TAP) {
                     Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
@@ -601,6 +657,63 @@ private fun EditActionDialog(
                         },
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Spacer(Modifier.height(6.dp))
+                    AiProviderModelPicker(
+                        provider = aiProvider,
+                        model = aiModel,
+                        fetchModels = fetchModels,
+                        onProvider = { p ->
+                            // 切换供应商时，模型名跟着切到新供应商的默认模型；「跟随全局」则清空。
+                            if (p != aiProvider) {
+                                aiModel = if (p == null) "" else p.models.firstOrNull().orEmpty()
+                            }
+                            aiProvider = p
+                        },
+                        onModel = { aiModel = it },
+                    )
+                }
+                if (action.type == ActionType.SNAPSHOT) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = aiPrompt,
+                        onValueChange = { aiPrompt = it },
+                        label = { Text("快照名称（条件节点按此名称对比）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    val hasRegion = action.endX > action.startX && action.endY > action.startY
+                    Text(
+                        if (hasRegion)
+                            "范围：(${action.startX.toInt()},${action.startY.toInt()})-(${action.endX.toInt()},${action.endY.toInt()})"
+                        else "范围：整页",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedButton(onClick = onPickRegion, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (hasRegion) "重选屏幕范围" else "选屏幕范围（截图框选）")
+                    }
+                }
+                if (action.type == ActionType.IF_PAGE_CHANGED) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = aiPrompt,
+                        onValueChange = { aiPrompt = it },
+                        label = { Text("快照 A 名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = snapshotB,
+                        onValueChange = { snapshotB = it },
+                        label = { Text("快照 B 名称（留空＝与当前实时页面比）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text("两个快照都填＝比较 A 与 B 是否不同；不同走「是」、相同走「否」。需保证快照在条件之前执行。",
+                        style = MaterialTheme.typography.bodySmall)
                 }
                 if (action.type == ActionType.IMAGE_MATCH) {
                     Spacer(Modifier.height(6.dp))
@@ -634,6 +747,15 @@ private fun EditActionDialog(
                         aiPrompt = aiPrompt.ifBlank { null },
                         matchThreshold = threshold.toFloatOrNull()?.coerceIn(0.1f, 1f)
                             ?: action.matchThreshold,
+                        retryCount = retry.toIntOrNull()?.coerceAtLeast(0) ?: action.retryCount,
+                        repeatPrevSteps = repeatSteps.toIntOrNull()?.coerceAtLeast(1)
+                            ?: action.repeatPrevSteps,
+                        // IF 节点用 templatePath 存快照B 名称；其它类型保持原 templatePath。
+                        templatePath = if (action.type == ActionType.IF_PAGE_CHANGED)
+                            snapshotB.ifBlank { null } else action.templatePath,
+                        alias = alias.ifBlank { null },
+                        aiProvider = aiProvider?.name,
+                        aiModel = if (aiProvider == null) null else aiModel.ifBlank { null },
                     )
                 )
             }) { Text("保存") }
@@ -656,4 +778,48 @@ private fun NumField(
         singleLine = true,
         modifier = modifier,
     )
+}
+
+/** AI 节点的「供应商 + 模型」选择器。provider 为 null 表示跟随全局设置。 */
+@Composable
+private fun AiProviderModelPicker(
+    provider: AiProvider?,
+    model: String,
+    fetchModels: suspend (AiProvider) -> Result<List<String>>,
+    onProvider: (AiProvider?) -> Unit,
+    onModel: (String) -> Unit,
+) {
+    var providerMenu by remember { mutableStateOf(false) }
+
+    Box(modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(onClick = { providerMenu = true }, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                Text("模型供应商", style = MaterialTheme.typography.labelMedium)
+                Text(provider?.label ?: "跟随全局设置", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        DropdownMenu(expanded = providerMenu, onDismissRequest = { providerMenu = false }) {
+            DropdownMenuItem(
+                text = { Text("跟随全局设置") },
+                onClick = { onProvider(null); providerMenu = false },
+            )
+            AiProvider.entries.forEach { p ->
+                DropdownMenuItem(
+                    text = { Text(p.label) },
+                    onClick = { onProvider(p); providerMenu = false },
+                )
+            }
+        }
+    }
+
+    if (provider != null) {
+        Spacer(Modifier.height(6.dp))
+        RefreshableModelField(
+            model = model,
+            onModel = onModel,
+            fetch = { fetchModels(provider) },
+            fallback = provider.models,
+            refreshKey = provider,
+        )
+    }
 }

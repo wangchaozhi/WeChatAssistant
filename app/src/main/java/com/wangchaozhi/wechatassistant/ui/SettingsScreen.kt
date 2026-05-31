@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,6 +61,9 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var model by remember { mutableStateOf(viewModel.qwenModel) }
     var thumbSide by remember { mutableStateOf(viewModel.thumbnailMaxSide) }
     var aiSide by remember { mutableStateOf(viewModel.aiImageMaxSide) }
+    var msKey by remember { mutableStateOf(viewModel.modelScopeApiKey) }
+    var msModel by remember { mutableStateOf(viewModel.modelScopeModel) }
+    var defaultProvider by remember { mutableStateOf(viewModel.defaultAiProvider) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -83,6 +87,12 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
+                DefaultProviderCard(
+                    provider = defaultProvider,
+                    onProvider = { defaultProvider = it; viewModel.defaultAiProvider = it },
+                )
+            }
+            item {
                 QwenCard(
                     apiKey = apiKey,
                     onApiKey = { apiKey = it; viewModel.apiKey = it },
@@ -90,6 +100,16 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onPrompt = { prompt = it; viewModel.defaultPrompt = it },
                     model = model,
                     onModel = { model = it; viewModel.qwenModel = it },
+                    fetchModels = { viewModel.fetchModels(AiProvider.DASHSCOPE) },
+                )
+            }
+            item {
+                ModelScopeCard(
+                    apiKey = msKey,
+                    onApiKey = { msKey = it; viewModel.modelScopeApiKey = it },
+                    model = msModel,
+                    onModel = { msModel = it; viewModel.modelScopeModel = it },
+                    fetchModels = { viewModel.fetchModels(AiProvider.MODELSCOPE) },
                 )
             }
             item {
@@ -117,6 +137,7 @@ private fun QwenCard(
     onPrompt: (String) -> Unit,
     model: String,
     onModel: (String) -> Unit,
+    fetchModels: suspend () -> Result<List<String>>,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -144,7 +165,13 @@ private fun QwenCard(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
-            ModelPicker(model = model, onModel = onModel)
+            RefreshableModelField(
+                model = model,
+                onModel = onModel,
+                fetch = fetchModels,
+                fallback = AiProvider.DASHSCOPE_MODELS,
+                label = "多模态模型",
+            )
             OutlinedTextField(
                 value = prompt,
                 onValueChange = onPrompt,
@@ -156,42 +183,97 @@ private fun QwenCard(
 }
 
 @Composable
-private fun ModelPicker(model: String, onModel: (String) -> Unit) {
+private fun DefaultProviderCard(provider: String, onProvider: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    Box(modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(
-            onClick = { expanded = true },
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("多模态模型", style = MaterialTheme.typography.labelMedium)
-                Text(model, style = MaterialTheme.typography.bodyMedium)
+    val current = AiProvider.parse(provider) ?: AiProvider.DASHSCOPE
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SettingsIcon(Icons.Filled.Cloud)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("默认 AI 供应商", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "AI 节点设为「跟随全局」时使用",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { expanded = true },
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("供应商", style = MaterialTheme.typography.labelMedium)
+                        Text(current.label, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    AiProvider.entries.forEach { p ->
+                        DropdownMenuItem(
+                            text = { Text(p.label) },
+                            onClick = { onProvider(p.name); expanded = false },
+                        )
+                    }
+                }
             }
         }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            QWEN_OMNI_MODELS.forEach { item ->
-                DropdownMenuItem(
-                    text = {
-                        Column {
-                            Text(item)
-                            Text(
-                                modelHint(item),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    },
-                    onClick = {
-                        onModel(item)
-                        expanded = false
-                    },
-                )
+    }
+}
+
+@Composable
+private fun ModelScopeCard(
+    apiKey: String,
+    onApiKey: (String) -> Unit,
+    model: String,
+    onModel: (String) -> Unit,
+    fetchModels: suspend () -> Result<List<String>>,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SettingsIcon(Icons.Filled.Cloud)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("魔搭社区设置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "AI 节点可选「魔搭社区」供应商时使用",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = onApiKey,
+                label = { Text("ModelScope API Key") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            RefreshableModelField(
+                model = model,
+                onModel = onModel,
+                fetch = fetchModels,
+                fallback = AiProvider.MODELSCOPE_MODELS,
+                label = "默认模型",
+            )
         }
     }
 }
@@ -320,23 +402,6 @@ private val AI_IMAGE_PRESETS = listOf(
     ThumbPreset(1280, "默认 1280px", "约 940 视觉 token / 次，平衡"),
     ThumbPreset(1568, "高识别 1568px", "约 1450 视觉 token / 次，识别更稳"),
 )
-
-private val QWEN_OMNI_MODELS = listOf(
-    "qwen3.5-omni-flash",
-    "qwen3.5-omni-flash-2026-03-15",
-    "qwen3.5-omni-plus",
-    "qwen3.5-omni-plus-2026-03-15",
-    "qwen3.5-omni-flash-realtime",
-    "qwen3.5-omni-flash-realtime-2026-03-15",
-    "qwen3.5-omni-plus-realtime",
-    "qwen3.5-omni-plus-realtime-2026-03-15",
-)
-
-private fun modelHint(model: String): String = when {
-    "realtime" in model -> "实时交互模型，截图问答通常不需要"
-    "plus" in model -> "更强理解，适合复杂截图"
-    else -> "默认推荐，速度和成本更均衡"
-}
 
 @Composable
 fun ShizukuCard(viewModel: MainViewModel) {

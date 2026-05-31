@@ -10,7 +10,9 @@ import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.data.repo.ScriptRepository
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiTapUseCase
+import com.wangchaozhi.wechatassistant.feature.ai.ModelScopeRepository
 import com.wangchaozhi.wechatassistant.feature.ai.ScreenshotAiUseCase
+import com.wangchaozhi.wechatassistant.feature.ai.VisionAiRepository
 import com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
 import com.wangchaozhi.wechatassistant.util.ShizukuManager
 import com.wangchaozhi.wechatassistant.feature.qwen.QwenRepository
@@ -27,6 +29,11 @@ class App : Application() {
 
     val database: AppDatabase by lazy {
         Room.databaseBuilder(this, AppDatabase::class.java, "wca.db")
+            .addMigrations(
+                AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7,
+                AppDatabase.MIGRATION_7_8,
+            )
             .fallbackToDestructiveMigration()
             .build()
     }
@@ -64,11 +71,29 @@ class App : Application() {
 
     val qwenRepo: QwenRepository by lazy { QwenRepository(httpClient) { settingsRepo.qwenApiKey } }
 
-    val screenshotAi: ScreenshotAiUseCase by lazy {
-        ScreenshotAiUseCase(this, qwenRepo, aiAnswerRepo)
+    private val modelScopeRepo: ModelScopeRepository by lazy {
+        ModelScopeRepository(httpClient) { settingsRepo.modelScopeApiKey }
     }
 
-    val aiTap: AiTapUseCase by lazy { AiTapUseCase(this, qwenRepo, aiAnswerRepo) }
+    val visionAi: VisionAiRepository by lazy {
+        VisionAiRepository(
+            qwen = qwenRepo,
+            modelScope = modelScopeRepo,
+            defaultProvider = {
+                com.wangchaozhi.wechatassistant.feature.ai.AiProvider
+                    .parse(settingsRepo.defaultAiProvider)
+                    ?: com.wangchaozhi.wechatassistant.feature.ai.AiProvider.DASHSCOPE
+            },
+            defaultDashScopeModel = { settingsRepo.qwenModel },
+            defaultModelScopeModel = { settingsRepo.modelScopeModel },
+        )
+    }
+
+    val screenshotAi: ScreenshotAiUseCase by lazy {
+        ScreenshotAiUseCase(this, visionAi, aiAnswerRepo)
+    }
+
+    val aiTap: AiTapUseCase by lazy { AiTapUseCase(this, visionAi, aiAnswerRepo) }
 
     val templateMatch: TemplateMatchUseCase by lazy { TemplateMatchUseCase(this) }
 

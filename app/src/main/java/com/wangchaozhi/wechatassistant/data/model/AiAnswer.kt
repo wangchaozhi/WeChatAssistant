@@ -11,4 +11,7 @@ data class AiAnswer(
     val answer: String,
     val thumbnailPath: String? = null,
     val scriptId: Long? = null,
+    // 本次回答实际使用的供应商（AiProvider.name）与模型名，便于历史中追溯。
+    val aiProvider: String? = null,
+    val aiModel: String? = null,
 )

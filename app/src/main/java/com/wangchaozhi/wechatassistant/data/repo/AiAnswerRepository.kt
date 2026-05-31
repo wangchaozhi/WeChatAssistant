@@ -24,6 +24,8 @@ class AiAnswerRepository(
         prompt: String,
         answer: String,
         scriptId: Long? = null,
+        aiProvider: String? = null,
+        aiModel: String? = null,
     ): Long = withContext(Dispatchers.IO) {
         val path = saveThumbnail(bitmap)
         dao.insert(
@@ -32,6 +34,8 @@ class AiAnswerRepository(
                 answer = answer,
                 thumbnailPath = path,
                 scriptId = scriptId,
+                aiProvider = aiProvider,
+                aiModel = aiModel,
             )
         )
     }

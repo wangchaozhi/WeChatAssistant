@@ -4,11 +4,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.wangchaozhi.wechatassistant.App
+import com.wangchaozhi.wechatassistant.data.model.Action
+import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.AiAnswer
+import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.data.repo.ScriptRepository
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
+import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
+import com.wangchaozhi.wechatassistant.feature.ai.VisionAiRepository
 import com.wangchaozhi.wechatassistant.service.ServiceBus
 import com.wangchaozhi.wechatassistant.util.ShizukuManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +37,7 @@ class MainViewModel(
     private val scriptRepo: ScriptRepository,
     private val historyRepo: AiAnswerRepository,
     private val settings: SettingsRepository,
+    private val visionAi: VisionAiRepository,
 ) : ViewModel() {
 
     val scripts: StateFlow<List<Script>> = scriptRepo.observeScripts()
@@ -64,6 +70,22 @@ class MainViewModel(
         get() = settings.qwenModel
         set(value) { settings.qwenModel = value }
 
+    var modelScopeApiKey: String
+        get() = settings.modelScopeApiKey
+        set(value) { settings.modelScopeApiKey = value }
+
+    var modelScopeModel: String
+        get() = settings.modelScopeModel
+        set(value) { settings.modelScopeModel = value }
+
+    var defaultAiProvider: String
+        get() = settings.defaultAiProvider
+        set(value) { settings.defaultAiProvider = value }
+
+    /** 实时拉取某供应商官方可用模型列表（用于设置/节点的模型下拉）。 */
+    suspend fun fetchModels(provider: AiProvider): Result<List<String>> =
+        visionAi.listModels(provider)
+
     var thumbnailMaxSide: Int
         get() = settings.thumbnailMaxSide
         set(value) { settings.thumbnailMaxSide = value }
@@ -95,20 +117,39 @@ class MainViewModel(
     fun createEmptyScript(onCreated: (Long) -> Unit) {
         viewModelScope.launch {
             val name = "脚本_" + SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(Date())
-            val id = scriptRepo.save(Script(name = name), emptyList())
+            // 新脚本种一个 START 节点作为图入口。
+            val start = Action(
+                id = -1L, scriptId = 0, index = 0, type = ActionType.START,
+                startX = 0f, startY = 0f, posX = 120f, posY = 120f,
+            )
+            val id = scriptRepo.saveGraph(Script(name = name), listOf(start), emptyList())
             onCreated(id)
         }
     }
 
     suspend fun loadScript(id: Long) = scriptRepo.load(id)
 
+    suspend fun loadGraphScript(id: Long) = scriptRepo.loadGraph(id)
+
     fun saveScript(
         script: Script,
-        actions: List<com.wangchaozhi.wechatassistant.data.model.Action>,
+        actions: List<Action>,
         onSaved: (Long) -> Unit = {},
     ) {
         viewModelScope.launch {
             val id = scriptRepo.save(script, actions)
+            onSaved(id)
+        }
+    }
+
+    fun saveGraph(
+        script: Script,
+        nodes: List<Action>,
+        edges: List<Edge>,
+        onSaved: (Long) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            val id = scriptRepo.saveGraph(script, nodes, edges)
             onSaved(id)
         }
     }
@@ -125,7 +166,7 @@ class MainViewModel(
         fun factory(app: App) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                MainViewModel(app.scriptRepo, app.aiAnswerRepo, app.settingsRepo) as T
+                MainViewModel(app.scriptRepo, app.aiAnswerRepo, app.settingsRepo, app.visionAi) as T
         }
     }
 }

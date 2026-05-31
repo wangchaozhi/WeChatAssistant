@@ -127,7 +127,90 @@ fun TemplateCropDialog(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("取消") }
                     Button(
-                        onClick = { crop.crop(source)?.let(onConfirm) },
+                        onClick = {
+                            crop.crop(source)?.let(onConfirm)
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("确定") }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 横向区间选择：在截图上显示两条可上下拖动的横线（默认 1/3、2/3 高度），
+ * 选中两线之间的横条（左右满宽）。确定后回传范围矩形（原图=屏幕像素，left=0、right=图宽）。
+ */
+@Composable
+fun RegionBandDialog(
+    source: Bitmap,
+    onDismiss: () -> Unit,
+    onConfirm: (CropRect) -> Unit,
+) {
+    val bw = source.width.toFloat()
+    val bh = source.height.toFloat()
+    var top by remember { mutableStateOf(bh / 3f) }
+    var bottom by remember { mutableStateOf(bh * 2f / 3f) }
+
+    Dialog(onDismiss, DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize(), color = Color(0xF2000000)) {
+            Column(Modifier.fillMaxSize().padding(12.dp)) {
+                Text("拖动上下两条横线，选中区间即快照范围（左右满宽）", color = Color.White)
+                Spacer(Modifier.height(8.dp))
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        val density = LocalDensity.current
+                        val cw = with(density) { maxWidth.toPx() }
+                        val ch = with(density) { maxHeight.toPx() }
+                        val scale = min(cw / source.width, ch / source.height)
+                        val dispW = with(density) { (source.width * scale).toDp() }
+                        val dispH = with(density) { (source.height * scale).toDp() }
+
+                        Box(
+                            Modifier
+                                .size(dispW, dispH)
+                                .pointerInput(source) {
+                                    var grabTop = true
+                                    detectDragGestures(
+                                        onDragStart = { off ->
+                                            val y = off.y / scale
+                                            grabTop = kotlin.math.abs(y - top) <= kotlin.math.abs(y - bottom)
+                                        },
+                                        onDrag = { change, delta ->
+                                            change.consume()
+                                            val dy = delta.y / scale
+                                            if (grabTop) top = (top + dy).coerceIn(0f, bottom - CropRect.MIN)
+                                            else bottom = (bottom + dy).coerceIn(top + CropRect.MIN, bh)
+                                        },
+                                    )
+                                },
+                        ) {
+                            Image(
+                                bitmap = source.asImageBitmap(),
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                            Canvas(Modifier.fillMaxSize()) {
+                                val t = top * scale
+                                val b = bottom * scale
+                                val dim = Color(0x99000000)
+                                drawRect(dim, Offset(0f, 0f), Size(size.width, t))
+                                drawRect(dim, Offset(0f, b), Size(size.width, size.height - b))
+                                val line = Color(0xFF00E5FF)
+                                drawLine(line, Offset(0f, t), Offset(size.width, t), strokeWidth = 4f)
+                                drawLine(line, Offset(0f, b), Offset(size.width, b), strokeWidth = 4f)
+                                drawCircle(line, 14f, Offset(size.width / 2, t))
+                                drawCircle(line, 14f, Offset(size.width / 2, b))
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("取消") }
+                    Button(
+                        onClick = { onConfirm(CropRect(0f, top, bw, bottom)) },
                         modifier = Modifier.weight(1f),
                     ) { Text("确定") }
                 }

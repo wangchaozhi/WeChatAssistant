@@ -55,6 +55,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.wangchaozhi.wechatassistant.data.model.AiAnswer
+import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
 import com.wangchaozhi.wechatassistant.util.copyToClipboard
 import java.io.File
 import java.text.SimpleDateFormat
@@ -153,6 +154,11 @@ private fun AnswerDetailDialog(
                     )
                     Spacer(Modifier.height(12.dp))
                 }
+                modelLabel(answer)?.let {
+                    Text("模型", style = MaterialTheme.typography.labelMedium)
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(10.dp))
+                }
                 Text("Prompt", style = MaterialTheme.typography.labelMedium)
                 Text(answer.prompt, style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(10.dp))
@@ -245,6 +251,14 @@ private fun AnswerRow(
             }
             Column(Modifier.weight(1f)) {
                 Text(formatTime(answer.createdAt), style = MaterialTheme.typography.labelSmall)
+                modelLabel(answer)?.let {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 Spacer(Modifier.height(2.dp))
                 Text(
                     answer.prompt.take(40),
@@ -269,3 +283,10 @@ private fun AnswerRow(
 
 private val timeFmt = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
 private fun formatTime(millis: Long): String = timeFmt.format(Date(millis))
+
+/** 历史项的「供应商 · 模型」标签；旧记录无该信息时返回 null（不显示）。 */
+private fun modelLabel(answer: AiAnswer): String? {
+    val model = answer.aiModel?.ifBlank { null } ?: return null
+    val provider = AiProvider.parse(answer.aiProvider)?.label ?: answer.aiProvider
+    return if (provider.isNullOrBlank()) model else "$provider · $model"
+}
