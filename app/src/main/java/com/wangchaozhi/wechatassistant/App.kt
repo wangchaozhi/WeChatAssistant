@@ -27,6 +27,7 @@ class App : Application() {
 
     val database: AppDatabase by lazy {
         Room.databaseBuilder(this, AppDatabase::class.java, "wca.db")
+            .addMigrations(AppDatabase.MIGRATION_5_6)
             .fallbackToDestructiveMigration()
             .build()
     }

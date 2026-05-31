@@ -582,6 +582,7 @@ internal fun EditActionDialog(
     var repeatSteps by remember { mutableStateOf(action.repeatPrevSteps.toString()) }
     // IF_PAGE_CHANGED 复用 templatePath 存「快照B」名称。
     var snapshotB by remember { mutableStateOf(action.templatePath.orEmpty()) }
+    var alias by remember { mutableStateOf(action.alias.orEmpty()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -589,6 +590,14 @@ internal fun EditActionDialog(
         text = {
             Column {
                 AssistChip(onClick = {}, label = { Text("#${action.index + 1}  ${typeLabel(action.type)}") })
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = alias,
+                    onValueChange = { alias = it },
+                    label = { Text("别名（可选，仅用于显示）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 Spacer(Modifier.height(8.dp))
                 when (action.type) {
                     ActionType.TAP, ActionType.LONG_PRESS -> {
@@ -683,7 +692,7 @@ internal fun EditActionDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(4.dp))
-                    Text("两个快照都填＝比较 A 与 B 是否不同；不同走「是」、相同走「否」。",
+                    Text("两个快照都填＝比较 A 与 B 是否不同；不同走「是」、相同走「否」。需保证快照在条件之前执行。",
                         style = MaterialTheme.typography.bodySmall)
                 }
                 if (action.type == ActionType.IMAGE_MATCH) {
@@ -724,6 +733,7 @@ internal fun EditActionDialog(
                         // IF 节点用 templatePath 存快照B 名称；其它类型保持原 templatePath。
                         templatePath = if (action.type == ActionType.IF_PAGE_CHANGED)
                             snapshotB.ifBlank { null } else action.templatePath,
+                        alias = alias.ifBlank { null },
                     )
                 )
             }) { Text("保存") }

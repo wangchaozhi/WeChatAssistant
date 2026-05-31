@@ -58,6 +58,8 @@ data class Action(
     // 节点图编辑器：节点在画布上的坐标（图空间）。线性时代未用，默认 0。
     val posX: Float = 0f,
     val posY: Float = 0f,
+    // 节点别名：用户给节点起的可读名字，仅用于编辑器显示，不影响执行。
+    val alias: String? = null,
 )
 
 data class ScriptWithActions(

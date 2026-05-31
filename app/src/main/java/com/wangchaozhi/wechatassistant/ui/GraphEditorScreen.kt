@@ -500,7 +500,13 @@ private fun NodeCard(
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(typeLabel(node.type), color = Color.White, style = MaterialTheme.typography.bodyMedium)
+            val alias = node.alias?.ifBlank { null }
+            if (alias != null) {
+                Text(alias, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                Text(typeLabel(node.type), color = Color(0xB3FFFFFF), style = MaterialTheme.typography.labelSmall)
+            } else {
+                Text(typeLabel(node.type), color = Color.White, style = MaterialTheme.typography.bodyMedium)
+            }
             if (node.type == ActionType.SNAPSHOT) {
                 val region = node.endX > node.startX && node.endY > node.startY
                 Text(

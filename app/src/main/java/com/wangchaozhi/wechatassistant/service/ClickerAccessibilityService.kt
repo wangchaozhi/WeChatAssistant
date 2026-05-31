@@ -16,6 +16,7 @@ import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.data.model.ScriptWithGraph
 import com.wangchaozhi.wechatassistant.feature.ai.AiTapUseCase
 import com.wangchaozhi.wechatassistant.feature.ai.ScreenshotAiUseCase
+import com.wangchaozhi.wechatassistant.feature.match.RegionDiff
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,10 +24,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 class ClickerAccessibilityService : AccessibilityService() {
@@ -37,6 +40,8 @@ class ClickerAccessibilityService : AccessibilityService() {
     private companion object {
         // 图遍历硬上限，防止无条件节点把关的环导致死循环。
         const val MAX_GRAPH_STEPS = 100_000
+        // OpenCV 区域相关度阈值：相关度低于此值即判「变了」（1.0=完全一致）。
+        const val SIMILARITY_THRESHOLD = 0.95
     }
 
     override fun onServiceConnected() {
@@ -143,7 +148,8 @@ class ClickerAccessibilityService : AccessibilityService() {
         }
         val startId = data.actions.firstOrNull { it.type == ActionType.START }?.id
             ?: data.actions.first().id
-        val baselines = HashMap<String, Int>()   // 快照名称 -> 指纹
+        val baselines = HashMap<String, Int>()                  // 快照名称 -> 文字指纹（无范围/无截图时）
+        val regionBmps = HashMap<String, android.graphics.Bitmap>()  // 快照名称 -> 区域截图（OpenCV 比较）
         // 快照名称 -> 范围矩形（取该名快照节点上设定的范围）。条件单快照比较时复用同一范围取实时页面。
         val snapRegions = HashMap<String, android.graphics.Rect?>()
         data.actions.forEach { a ->
@@ -165,30 +171,62 @@ class ClickerAccessibilityService : AccessibilityService() {
                 ActionType.SNAPSHOT -> {
                     val key = node.aiPrompt?.ifBlank { null } ?: "默认"
                     val region = regionOf(node)
-                    val fp = pageFingerprint(region)
-                    baselines[key] = fp
-                    App.from(this@ClickerAccessibilityService).appendLog("SNAPSHOT[$key]=$fp region=$region")
+                    // 有范围且截图就绪 → 存区域截图（OpenCV 比较）；否则存文字指纹。
+                    val bmp = if (region != null && ServiceBus.captureReady.value)
+                        regionCrop(region) else null
+                    if (bmp != null) {
+                        regionBmps.remove(key)?.recycle()
+                        regionBmps[key] = bmp
+                        baselines.remove(key)
+                        App.from(this@ClickerAccessibilityService)
+                            .appendLog("SNAPSHOT[$key]=img ${bmp.width}x${bmp.height} region=$region")
+                    } else {
+                        val fp = pageFingerprint(region)
+                        baselines[key] = fp
+                        regionBmps.remove(key)?.recycle()
+                        App.from(this@ClickerAccessibilityService).appendLog("SNAPSHOT[$key]=$fp(text) region=$region")
+                    }
                     0
                 }
                 ActionType.IF_PAGE_CHANGED -> {
                     val keyA = node.aiPrompt?.ifBlank { null } ?: "默认"
                     val keyB = node.templatePath?.ifBlank { null }   // 复用字段存「快照B」名称
-                    val changed = if (keyB != null) {
-                        // 比较两个具名快照：都拍过且不同 => 变了。
-                        val a = baselines[keyA]
-                        val b = baselines[keyB]
-                        val c = a != null && b != null && a != b
-                        App.from(this@ClickerAccessibilityService)
-                            .appendLog("IF 快照[$keyA]=$a vs 快照[$keyB]=$b changed=$c")
-                        c
-                    } else {
-                        // 单快照：当前实时页面 vs 快照A。复用快照A 的范围，保证比的是同一区域。
-                        val base = baselines[keyA]
-                        val now = pageFingerprint(snapRegions[keyA])
-                        val c = base != null && now != base
-                        App.from(this@ClickerAccessibilityService)
-                            .appendLog("IF vs 快照[$keyA] changed=$c (now=$now base=$base)")
-                        c
+                    val changed = when {
+                        // 双快照 + 区域图：OpenCV 相关度，低于阈值即变。
+                        keyB != null && regionBmps[keyA] != null && regionBmps[keyB] != null -> {
+                            val sim = RegionDiff.similarity(regionBmps[keyA]!!, regionBmps[keyB]!!)
+                            val c = sim != null && sim < SIMILARITY_THRESHOLD
+                            App.from(this@ClickerAccessibilityService)
+                                .appendLog("IF OpenCV 快照[$keyA]↔[$keyB] sim=${"%.3f".format(sim ?: -1.0)} changed=$c")
+                            c
+                        }
+                        // 双快照 + 文字指纹。
+                        keyB != null -> {
+                            val a = baselines[keyA]; val b = baselines[keyB]
+                            val c = a != null && b != null && a != b
+                            App.from(this@ClickerAccessibilityService)
+                                .appendLog("IF 快照[$keyA]=$a vs 快照[$keyB]=$b changed=$c")
+                            c
+                        }
+                        // 单快照 + 区域图：实时区域 vs 快照A。
+                        regionBmps[keyA] != null -> {
+                            val now = regionCrop(snapRegions[keyA])
+                            val sim = if (now != null) RegionDiff.similarity(regionBmps[keyA]!!, now) else null
+                            now?.recycle()
+                            val c = sim != null && sim < SIMILARITY_THRESHOLD
+                            App.from(this@ClickerAccessibilityService)
+                                .appendLog("IF OpenCV vs 快照[$keyA] sim=${"%.3f".format(sim ?: -1.0)} changed=$c")
+                            c
+                        }
+                        // 单快照 + 文字指纹。
+                        else -> {
+                            val base = baselines[keyA]
+                            val now = pageFingerprint(snapRegions[keyA])
+                            val c = base != null && now != base
+                            App.from(this@ClickerAccessibilityService)
+                                .appendLog("IF vs 快照[$keyA] changed=$c (now=$now base=$base)")
+                            c
+                        }
                     }
                     if (changed) 0 else 1
                 }
@@ -210,6 +248,25 @@ class ClickerAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** 截屏并裁出区域 Bitmap（按屏幕像素映射到截图分辨率）。截图不可用返回 null。 */
+    private suspend fun regionCrop(region: android.graphics.Rect?): android.graphics.Bitmap? {
+        val bmp = withTimeoutOrNull(3_000) {
+            ServiceBus.lastBitmap.value = null
+            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture)
+            ServiceBus.lastBitmap.first { it != null }
+        } ?: return null
+        return withContext(Dispatchers.Default) {
+            val dm = resources.displayMetrics
+            val sx = bmp.width.toFloat() / dm.widthPixels.coerceAtLeast(1)
+            val sy = bmp.height.toFloat() / dm.heightPixels.coerceAtLeast(1)
+            val l = ((region?.left ?: 0) * sx).toInt().coerceIn(0, bmp.width - 1)
+            val t = ((region?.top ?: 0) * sy).toInt().coerceIn(0, bmp.height - 1)
+            val r = ((region?.right ?: bmp.width) * sx).toInt().coerceIn(l + 1, bmp.width)
+            val b = ((region?.bottom ?: bmp.height) * sy).toInt().coerceIn(t + 1, bmp.height)
+            runCatching { android.graphics.Bitmap.createBitmap(bmp, l, t, r - l, b - t) }.getOrNull()
+        }
+    }
+
     /** 从快照节点的 startX/startY/endX/endY 取范围矩形；无效则整页（null）。 */
     private fun regionOf(node: Action): android.graphics.Rect? =
         if (node.endX > node.startX && node.endY > node.startY)
@@ -217,8 +274,11 @@ class ClickerAccessibilityService : AccessibilityService() {
         else null
 
     /**
-     * 当前活动窗口可见节点的指纹：拼接 text/className/bounds 后取 hash。
-     * [region] 非空时只统计与该屏幕矩形相交的节点（用于范围快照）。
+     * 当前活动窗口的「文字内容指纹」：只统计有文字或 contentDescription 的可见节点
+     * （自动跳过空的整屏容器），拼接 className + text + contentDescription 取 hash。
+     * 不含边界坐标——忽略位移/滚动/动画/重渲染带来的纯视觉变化，只在意文字内容是否变。
+     * [region] 非空时只统计「节点中心落在该矩形内」的节点：既纳入条带里的列表项，
+     * 又排除中心在别处的整屏容器。
      */
     private suspend fun pageFingerprint(region: android.graphics.Rect? = null): Int =
         withContext(Dispatchers.Main.immediate) {
@@ -228,12 +288,17 @@ class ClickerAccessibilityService : AccessibilityService() {
             fun walk(node: AccessibilityNodeInfo?) {
                 if (node == null) return
                 if (node.isVisibleToUser) {
-                    node.getBoundsInScreen(rect)
-                    if (region == null || android.graphics.Rect.intersects(region, rect)) {
-                        sb.append(node.className).append('|')
-                            .append(node.text ?: "").append('|')
-                            .append(rect.left).append(',').append(rect.top).append(',')
-                            .append(rect.right).append(',').append(rect.bottom).append(';')
+                    val text = node.text?.toString().orEmpty()
+                    val desc = node.contentDescription?.toString().orEmpty()
+                    if (text.isNotBlank() || desc.isNotBlank()) {
+                        node.getBoundsInScreen(rect)
+                        val inRegion = region == null ||
+                            region.contains((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)
+                        if (inRegion) {
+                            sb.append(node.className).append('|')
+                                .append(text).append('|')
+                                .append(desc).append(';')
+                        }
                     }
                 }
                 for (i in 0 until node.childCount) walk(node.getChild(i))
