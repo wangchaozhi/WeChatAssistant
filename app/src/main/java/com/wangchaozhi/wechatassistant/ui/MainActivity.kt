@@ -67,6 +67,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -599,6 +601,7 @@ private fun ScriptItem(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val haptic = LocalHapticFeedback.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onEdit,
@@ -642,7 +645,10 @@ private fun ScriptItem(
             IconButton(onClick = onEdit) {
                 Icon(Icons.Filled.Edit, contentDescription = "编辑")
             }
-            IconButton(onClick = onDelete) {
+            IconButton(onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onDelete()
+            }) {
                 Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
             }
         }

@@ -100,11 +100,102 @@ class ClickerAccessibilityService : AccessibilityService() {
     }
 
     private fun pasteIntoFocused(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val focus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            ?: findEditable(root)
-            ?: return false
-        return focus.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        // 1) 首选：无障碍输入法接口直接 commitText（Android 14+）。走的是和真实键盘相同的
+        //    InputConnection 通道，由输入框自己接收，不依赖无障碍节点——微信等剥掉节点信息的
+        //    输入框也能写进去。要写的文本取自我们自己内存里的 AI 答案（后台读不到剪贴板）。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val text = pasteText()
+            if (!text.isNullOrEmpty() && commitViaIme(text)) return true
+        }
+        // 2) 兜底：节点动作。ACTION_PASTE 用系统剪贴板，SET_TEXT 直接写文本。
+        val node = findFocusedEditable()
+        if (node == null) {
+            App.from(this).appendLog("PASTE: 未找到输入焦点/可编辑节点")
+            return false
+        }
+        App.from(this).appendLog(
+            "PASTE target=${node.className} editable=${node.isEditable} focused=${node.isFocused}"
+        )
+        if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) return true
+        return pasteBySetText(node)
+    }
+
+    /** 要粘贴的文本：优先内存里的 AI 答案，其次尝试剪贴板（后台多半读不到）。 */
+    private fun pasteText(): String? =
+        ServiceBus.lastAiAnswer.value?.takeIf { it.isNotEmpty() } ?: clipboardText()
+
+    /** 通过无障碍输入法接口把文本 commit 到当前获焦的输入框。Android 14+。 */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private fun commitViaIme(text: String): Boolean {
+        val ic = runCatching { inputMethod?.currentInputConnection }.getOrNull() ?: run {
+            App.from(this).appendLog("PASTE IME: InputConnection 不可用（无获焦输入框）")
+            return false
+        }
+        // AccessibilityInputConnection.commitText 返回 void，仅三参（含 TextAttribute）；不抛异常即成功。
+        return try {
+            ic.commitText(text, 1, null)
+            App.from(this).appendLog("PASTE via IME commitText len=${text.length}")
+            true
+        } catch (t: Throwable) {
+            App.from(this).appendLog("PASTE IME commitText 异常: ${t.message}")
+            false
+        }
+    }
+
+    private fun clipboardText(): String? {
+        val clip = getSystemService(android.content.ClipboardManager::class.java)
+        return clip?.primaryClip?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)?.coerceToText(this)?.toString()
+    }
+
+    /** 跨所有窗口找输入框：优先「真正可编辑」的输入焦点，其次任意可见可编辑，最后退化为焦点占位节点。 */
+    private fun findFocusedEditable(): AccessibilityNodeInfo? {
+        val roots = buildList {
+            rootInActiveWindow?.let { add(it) }
+            for (w in windows) w.root?.let { add(it) }
+        }
+        App.from(this).appendLog("PASTE windows=${windows.size} roots=${roots.size}")
+        // 1) 真正可编辑的输入焦点
+        for (r in roots) {
+            val f = r.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            if (f != null && f.isEditable) return f
+        }
+        // 2) 任意可见可编辑节点
+        for (r in roots) findEditable(r)?.let { return it }
+        // 3) 兜底：输入焦点占位节点（给 ACTION_PASTE 一次机会，应对个别不标 editable 的输入框）
+        for (r in roots) r.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let { return it }
+        return null
+    }
+
+    /** ACTION_PASTE 不被支持时的兜底：读剪贴板，把文本追加到光标处（无选区则末尾）。 */
+    private fun pasteBySetText(node: AccessibilityNodeInfo): Boolean {
+        val text = pasteText()
+        if (text.isNullOrEmpty()) {
+            App.from(this).appendLog("PASTE: 无可粘贴文本，SET_TEXT 兜底失败")
+            return false
+        }
+        val existing = node.text?.toString().orEmpty()
+        val start = node.textSelectionStart
+        val end = node.textSelectionEnd
+        val (newText, cursor) = if (start in 0..existing.length && end in 0..existing.length) {
+            val s = minOf(start, end); val e = maxOf(start, end)
+            (existing.substring(0, s) + text + existing.substring(e)) to (s + text.length)
+        } else {
+            (existing + text) to (existing.length + text.length)
+        }
+        val setArgs = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
+        }
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setArgs)) {
+            App.from(this).appendLog("PASTE: SET_TEXT 也失败")
+            return false
+        }
+        val selArgs = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
+        }
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
+        return true
     }
 
     private fun findEditable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
@@ -522,10 +613,7 @@ class ClickerAccessibilityService : AccessibilityService() {
     }
 
     private fun enterIntoFocused(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        val focus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            ?: findEditable(root)
-            ?: return false
+        val focus = findFocusedEditable() ?: return false
         // 多行输入框：回车 = 在光标处插入换行；单行：先尝试 IME 提交动作（发送/搜索/下一步）。
         if (focus.isMultiLine) {
             if (insertNewlineAtCursor(focus)) return true
