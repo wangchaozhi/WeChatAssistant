@@ -18,8 +18,8 @@ data class Script(
 enum class ActionType {
     TAP, SWIPE, LONG_PRESS, WAIT, SCREENSHOT_AI, AI_TAP, PASTE, ENTER, IMAGE_MATCH, WAIT_PAGE_CHANGE,
     START,            // 图入口节点，执行时 no-op
-    SNAPSHOT,         // 抓当前页面指纹存入基准寄存器
-    IF_PAGE_CHANGED,  // 比较当前指纹与基准，瞬时返回；出口 port 0=变了 / 1=没变
+    SNAPSHOT,         // 抓当前页面截图存入基准寄存器
+    IF_PAGE_CHANGED,  // 比较当前截图与基准，瞬时返回；出口 port 0=变了 / 1=没变
     IF_IMAGE_EXISTS,  // 模板图在当前屏幕是否存在；出口 port 0=找到 / 1=没找到。只判断不点击。
     IF_TEXT_EXISTS,   // aiPrompt 文字是否出现在当前页面控件树；出口 port 0=找到 / 1=没找到。
     LOOP,             // 计数循环：retryCount 为次数。出口 port 0=继续(回循环体) / 1=到次数(往下)。

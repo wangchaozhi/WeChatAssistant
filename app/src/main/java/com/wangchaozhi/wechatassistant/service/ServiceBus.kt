@@ -22,11 +22,15 @@ object ServiceBus {
     sealed interface CaptureCmd {
         data class TakeAndAsk(val prompt: String) : CaptureCmd
         data object JustCapture : CaptureCmd
+        data object StartStream : CaptureCmd
+        data object StopStream : CaptureCmd
     }
 
     val captureCmd = MutableSharedFlow<CaptureCmd>(extraBufferCapacity = 4)
 
     val lastBitmap = MutableStateFlow<Bitmap?>(null)
+    data class CaptureFrame(val id: Long, val bitmap: Bitmap)
+    val streamFrame = MutableStateFlow<CaptureFrame?>(null)
     val lastAiAnswer = MutableStateFlow<String?>(null)
 
     sealed interface AiResult {

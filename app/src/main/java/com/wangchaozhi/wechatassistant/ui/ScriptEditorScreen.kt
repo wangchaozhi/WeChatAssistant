@@ -227,6 +227,7 @@ fun ScriptEditorScreen(
                     launchTemplatePicker()
                 },
                 fetchModels = { viewModel.fetchModels(it) },
+                cachedModels = { viewModel.cachedModels(it) },
             )
         }
 
@@ -469,9 +470,13 @@ internal fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Act
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 0L,
     )
-    ActionType.SNAPSHOT, ActionType.IF_PAGE_CHANGED -> Action(
+    ActionType.SNAPSHOT -> Action(
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 0L, aiPrompt = "快照1",
+    )
+    ActionType.IF_PAGE_CHANGED -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L, aiPrompt = "快照1", matchThreshold = 0.95f,
     )
     ActionType.IF_IMAGE_EXISTS -> Action(
         scriptId = scriptId, index = index, type = type,
@@ -504,7 +509,7 @@ internal fun typeLabel(t: ActionType): String = when (t) {
     ActionType.WAIT_PAGE_CHANGE -> "等待页面变化"
     ActionType.START -> "开始"
     ActionType.SNAPSHOT -> "快照"
-    ActionType.IF_PAGE_CHANGED -> "条件：页面是否变化"
+    ActionType.IF_PAGE_CHANGED -> "条件：检测变化"
     ActionType.IF_IMAGE_EXISTS -> "条件：图像是否存在"
     ActionType.IF_TEXT_EXISTS -> "条件：文字是否存在"
     ActionType.LOOP -> "循环 N 次"
@@ -527,7 +532,8 @@ private fun describe(a: Action): String = when (a.type) {
         "页面没变就重复前 ${a.repeatPrevSteps} 步 · 最多 ${a.retryCount} 次 · 间隔 ${a.durationMs}ms"
     ActionType.START -> "图入口"
     ActionType.SNAPSHOT -> "记录当前页面为基准"
-    ActionType.IF_PAGE_CHANGED -> "页面变了走「是」，否则走「否」"
+    ActionType.IF_PAGE_CHANGED ->
+        "检测到变化走「是」，否则走「否」 · 阈值 ${"%.2f".format(a.matchThreshold)}"
     ActionType.IF_IMAGE_EXISTS ->
         "${if (a.templatePath != null) "找到图" else "⚠ 未设模板"} 走「有」，否则走「无」 · 阈值 ${"%.2f".format(a.matchThreshold)}"
     ActionType.IF_TEXT_EXISTS -> "出现文字「${a.aiPrompt?.take(20) ?: ""}」走「有」，否则走「无」"
@@ -597,6 +603,7 @@ internal fun EditActionDialog(
     onRecaptureTemplate: () -> Unit = {},
     onPickRegion: () -> Unit = {},
     fetchModels: suspend (AiProvider) -> Result<List<String>> = { Result.success(it.models) },
+    cachedModels: (AiProvider) -> List<String> = { emptyList() },
 ) {
     var startX by remember { mutableStateOf(action.startX.toString()) }
     var startY by remember { mutableStateOf(action.startY.toString()) }
@@ -674,7 +681,12 @@ internal fun EditActionDialog(
                         action.type != ActionType.LOOP &&
                         action.type != ActionType.STOP
                     ) {
-                        NumField(duration, { duration = it }, "持续 (ms)", Modifier.fillMaxWidth())
+                        NumField(
+                            duration,
+                            { duration = it },
+                            if (action.type == ActionType.IF_PAGE_CHANGED) "检测时长 (ms，0=单次检测)" else "持续 (ms)",
+                            Modifier.fillMaxWidth(),
+                        )
                     }
                     if (action.type == ActionType.WAIT) {
                         Spacer(Modifier.height(6.dp))
@@ -698,6 +710,7 @@ internal fun EditActionDialog(
                         provider = aiProvider,
                         model = aiModel,
                         fetchModels = fetchModels,
+                        cachedModels = cachedModels,
                         onProvider = { p ->
                             // 切换供应商时，模型名跟着切到新供应商的默认模型；「跟随全局」则清空。
                             if (p != aiProvider) {
@@ -747,8 +760,10 @@ internal fun EditActionDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Spacer(Modifier.height(6.dp))
+                    NumField(threshold, { threshold = it }, "变化阈值 (0~1，越大越敏感)", Modifier.fillMaxWidth())
                     Spacer(Modifier.height(4.dp))
-                    Text("两个快照都填＝比较 A 与 B 是否不同；不同走「是」、相同走「否」。需保证快照在条件之前执行。",
+                    Text("留空 B＝在检测时长内持续对比 A 与实时页面，检测到变化立刻走「是」，超时走「否」。两个快照都填＝比较 A 与 B 是否不同。",
                         style = MaterialTheme.typography.bodySmall)
                 }
                 if (action.type == ActionType.IMAGE_MATCH) {
@@ -865,6 +880,7 @@ private fun AiProviderModelPicker(
     provider: AiProvider?,
     model: String,
     fetchModels: suspend (AiProvider) -> Result<List<String>>,
+    cachedModels: (AiProvider) -> List<String>,
     onProvider: (AiProvider?) -> Unit,
     onModel: (String) -> Unit,
 ) {
@@ -897,7 +913,7 @@ private fun AiProviderModelPicker(
             model = model,
             onModel = onModel,
             fetch = { fetchModels(provider) },
-            fallback = provider.models,
+            fallback = cachedModels(provider).ifEmpty { provider.models },
             refreshKey = provider,
         )
     }

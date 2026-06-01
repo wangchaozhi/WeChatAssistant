@@ -40,6 +40,8 @@ class MainViewModel(
     private val visionAi: VisionAiRepository,
 ) : ViewModel() {
 
+    var settingsModelsFetchedThisRun: Boolean = false
+
     val scripts: StateFlow<List<Script>> = scriptRepo.observeScripts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -82,9 +84,14 @@ class MainViewModel(
         get() = settings.defaultAiProvider
         set(value) { settings.defaultAiProvider = value }
 
-    /** 实时拉取某供应商官方可用模型列表（用于设置/节点的模型下拉）。 */
+    fun cachedModels(provider: AiProvider): List<String> =
+        settings.cachedModels(provider.name)
+
+    /** 手动拉取某供应商官方可用模型列表，成功后持久缓存。 */
     suspend fun fetchModels(provider: AiProvider): Result<List<String>> =
-        visionAi.listModels(provider)
+        visionAi.listModels(provider).onSuccess { models ->
+            settings.setCachedModels(provider.name, models)
+        }
 
     var thumbnailMaxSide: Int
         get() = settings.thumbnailMaxSide

@@ -56,6 +56,24 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt(KEY_AI_SIDE, DEFAULT_AI_SIDE)
         set(value) = prefs.edit().putInt(KEY_AI_SIDE, value).apply()
 
+    fun cachedModels(providerName: String): List<String> =
+        prefs.getString("$KEY_MODEL_CACHE_PREFIX$providerName", "")
+            .orEmpty()
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+
+    fun setCachedModels(providerName: String, models: List<String>) {
+        prefs.edit()
+            .putString(
+                "$KEY_MODEL_CACHE_PREFIX$providerName",
+                models.map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString("\n"),
+            )
+            .apply()
+    }
+
     var adbHost: String
         get() = prefs.getString(KEY_ADB_HOST, DEFAULT_ADB_HOST).orEmpty()
         set(value) = prefs.edit().putString(KEY_ADB_HOST, value).apply()
@@ -77,6 +95,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_DEFAULT_PROVIDER = "default_ai_provider"
         private const val KEY_THUMB_SIDE = "thumb_max_side"
         private const val KEY_AI_SIDE = "ai_image_max_side"
+        private const val KEY_MODEL_CACHE_PREFIX = "model_cache_"
         private const val KEY_ADB_HOST = "adb_host"
         private const val KEY_ADB_PAIR_PORT = "adb_pair_port"
         private const val KEY_ADB_CONNECT_PORT = "adb_connect_port"

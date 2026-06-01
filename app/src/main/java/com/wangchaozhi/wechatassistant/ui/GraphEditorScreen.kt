@@ -387,6 +387,7 @@ fun GraphEditorScreen(
                 onDismiss = { editingId = null },
                 onConfirm = { updated -> nodes[idx] = updated; editingId = null },
                 fetchModels = { viewModel.fetchModels(it) },
+                cachedModels = { viewModel.cachedModels(it) },
                 onRecaptureTemplate = {
                     pendingRecaptureId = ed
                     editingId = null
@@ -552,7 +553,8 @@ private fun NodeCard(
                 val a = node.aiPrompt?.ifBlank { null } ?: "默认"
                 val b = node.templatePath?.ifBlank { null }
                 Text(
-                    if (b != null) "「$a」↔「$b」" else "「$a」↔ 实时",
+                    (if (b != null) "「$a」↔「$b」" else "「$a」↔ 实时") +
+                        " · 阈值${"%.2f".format(node.matchThreshold)}",
                     color = Color(0xCCFFFFFF),
                     style = MaterialTheme.typography.labelSmall,
                 )
@@ -651,7 +653,7 @@ private val NODE_GROUPS: List<Pair<String, List<Pair<ActionType, String>>>> = li
     ),
     "快照 / 条件" to listOf(
         ActionType.SNAPSHOT to "快照（记基准）",
-        ActionType.IF_PAGE_CHANGED to "页面是否变化",
+        ActionType.IF_PAGE_CHANGED to "检测变化",
         ActionType.IF_IMAGE_EXISTS to "图像是否存在",
         ActionType.IF_TEXT_EXISTS to "文字是否存在",
     ),

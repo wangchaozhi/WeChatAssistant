@@ -1,7 +1,10 @@
 package com.wangchaozhi.wechatassistant.ui
 
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.provider.Settings
+import android.widget.Toast
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +20,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cloud
@@ -51,13 +57,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
 import com.wangchaozhi.wechatassistant.service.CaptureForegroundService
 import com.wangchaozhi.wechatassistant.service.ServiceBus
+import com.wangchaozhi.wechatassistant.util.copyToClipboard
 import com.wangchaozhi.wechatassistant.util.WifiAdbNotification
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,6 +80,16 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var msKey by remember { mutableStateOf(viewModel.modelScopeApiKey) }
     var msModel by remember { mutableStateOf(viewModel.modelScopeModel) }
     var defaultProvider by remember { mutableStateOf(viewModel.defaultAiProvider) }
+    var qwenCachedModels by remember { mutableStateOf(viewModel.cachedModels(AiProvider.DASHSCOPE)) }
+    var modelScopeCachedModels by remember { mutableStateOf(viewModel.cachedModels(AiProvider.MODELSCOPE)) }
+
+    LaunchedEffect(Unit) {
+        if (!viewModel.settingsModelsFetchedThisRun) {
+            viewModel.fetchModels(AiProvider.DASHSCOPE).onSuccess { qwenCachedModels = it }
+            viewModel.fetchModels(AiProvider.MODELSCOPE).onSuccess { modelScopeCachedModels = it }
+            viewModel.settingsModelsFetchedThisRun = true
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -106,6 +126,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onApiKey = { apiKey = it; viewModel.apiKey = it },
                     model = model,
                     onModel = { model = it; viewModel.qwenModel = it },
+                    cachedModels = qwenCachedModels,
                     fetchModels = { viewModel.fetchModels(AiProvider.DASHSCOPE) },
                 )
             }
@@ -115,6 +136,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onApiKey = { msKey = it; viewModel.modelScopeApiKey = it },
                     model = msModel,
                     onModel = { msModel = it; viewModel.modelScopeModel = it },
+                    cachedModels = modelScopeCachedModels,
                     fetchModels = { viewModel.fetchModels(AiProvider.MODELSCOPE) },
                 )
             }
@@ -131,6 +153,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 )
             }
             item { WifiAdbCard(viewModel) }
+            item { DebugLogCard() }
         }
     }
 }
@@ -141,6 +164,7 @@ private fun QwenCard(
     onApiKey: (String) -> Unit,
     model: String,
     onModel: (String) -> Unit,
+    cachedModels: List<String>,
     fetchModels: suspend () -> Result<List<String>>,
 ) {
     Card(
@@ -173,7 +197,7 @@ private fun QwenCard(
                 model = model,
                 onModel = onModel,
                 fetch = fetchModels,
-                fallback = AiProvider.DASHSCOPE_MODELS,
+                fallback = cachedModels.ifEmpty { AiProvider.DASHSCOPE_MODELS },
                 label = "多模态模型",
             )
         }
@@ -248,6 +272,7 @@ private fun ModelScopeCard(
     onApiKey: (String) -> Unit,
     model: String,
     onModel: (String) -> Unit,
+    cachedModels: List<String>,
     fetchModels: suspend () -> Result<List<String>>,
 ) {
     Card(
@@ -280,7 +305,7 @@ private fun ModelScopeCard(
                 model = model,
                 onModel = onModel,
                 fetch = fetchModels,
-                fallback = AiProvider.MODELSCOPE_MODELS,
+                fallback = cachedModels.ifEmpty { AiProvider.MODELSCOPE_MODELS },
                 label = "默认模型",
             )
         }
@@ -514,6 +539,195 @@ fun WifiAdbCard(viewModel: MainViewModel) {
         )
     }
 }
+
+@Composable
+private fun DebugLogCard() {
+    val context = LocalContext.current
+    val app = remember(context) { App.from(context) }
+    var showLog by remember { mutableStateOf(false) }
+    var showImages by remember { mutableStateOf(false) }
+    var logText by remember { mutableStateOf("") }
+    var logSize by remember { mutableStateOf(app.logFileSizeBytes()) }
+    var debugImages by remember { mutableStateOf(app.debugBitmapFiles()) }
+
+    fun refreshLog() {
+        logText = app.readLog()
+        logSize = app.logFileSizeBytes()
+        debugImages = app.debugBitmapFiles()
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SettingsIcon(Icons.Filled.Refresh)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("调试日志", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "记录截图、AI、快照对比与脚本运行信息 · ${formatBytes(logSize)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        refreshLog()
+                        showLog = true
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                ) { Text("查看日志") }
+                OutlinedButton(
+                    onClick = {
+                        context.copyToClipboard(app.readLog(Int.MAX_VALUE), label = "WCA Debug Log")
+                        Toast.makeText(context, "日志已复制", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                ) { Text("复制") }
+                OutlinedButton(
+                    onClick = {
+                        debugImages = app.debugBitmapFiles()
+                        showImages = true
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                ) { Text("查看图片") }
+                TextButton(
+                    onClick = {
+                        app.clearLog()
+                        refreshLog()
+                        Toast.makeText(context, "日志已清空", Toast.LENGTH_SHORT).show()
+                    },
+                ) { Text("清空") }
+            }
+        }
+    }
+
+    if (showLog) {
+        AlertDialog(
+            shape = RoundedCornerShape(8.dp),
+            onDismissRequest = { showLog = false },
+            title = { Text("调试日志") },
+            text = {
+                val scroll = rememberScrollState()
+                SelectionContainer {
+                    Text(
+                        text = logText.ifBlank { "暂无日志" },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(420.dp)
+                            .verticalScroll(scroll),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showLog = false }) { Text("关闭") }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        context.copyToClipboard(app.readLog(Int.MAX_VALUE), label = "WCA Debug Log")
+                        Toast.makeText(context, "日志已复制", Toast.LENGTH_SHORT).show()
+                    }) { Text("复制") }
+                    TextButton(onClick = {
+                        app.clearLog()
+                        refreshLog()
+                        Toast.makeText(context, "日志已清空", Toast.LENGTH_SHORT).show()
+                    }) { Text("清空") }
+                }
+            },
+        )
+    }
+
+    if (showImages) {
+        DebugImagesDialog(
+            images = debugImages,
+            onRefresh = { debugImages = app.debugBitmapFiles() },
+            onDismiss = { showImages = false },
+        )
+    }
+}
+
+@Composable
+private fun DebugImagesDialog(
+    images: List<File>,
+    onRefresh: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        shape = RoundedCornerShape(8.dp),
+        onDismissRequest = onDismiss,
+        title = { Text("调试图片") },
+        text = {
+            val scroll = rememberScrollState()
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .height(520.dp)
+                    .verticalScroll(scroll),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (images.isEmpty()) {
+                    Text(
+                        "暂无调试图片。运行脚本后会生成 dbg_snap_* 和 dbg_now_*。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    images.forEach { file ->
+                        DebugImageItem(file)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) { Text("关闭") }
+        },
+        dismissButton = {
+            TextButton(onClick = onRefresh) { Text("刷新") }
+        },
+    )
+}
+
+@Composable
+private fun DebugImageItem(file: File) {
+    val bitmap = remember(file.absolutePath, file.lastModified()) {
+        BitmapFactory.decodeFile(file.absolutePath)
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "${file.name} · ${formatBytes(file.length())}",
+            style = MaterialTheme.typography.labelMedium,
+        )
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = file.name,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp)),
+            )
+        } else {
+            Text(
+                "图片无法解码",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+private fun formatBytes(bytes: Long): String =
+    when {
+        bytes < 1024 -> "${bytes}B"
+        bytes < 1024 * 1024 -> "${bytes / 1024}KB"
+        else -> "%.1fMB".format(bytes / 1024f / 1024f)
+    }
 
 @Composable
 private fun SettingsIcon(icon: androidx.compose.ui.graphics.vector.ImageVector) {

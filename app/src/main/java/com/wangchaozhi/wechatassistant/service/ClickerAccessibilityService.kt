@@ -40,8 +40,7 @@ class ClickerAccessibilityService : AccessibilityService() {
     private companion object {
         // 图遍历硬上限，防止无条件节点把关的环导致死循环。
         const val MAX_GRAPH_STEPS = 100_000
-        // OpenCV 区域相关度阈值：相关度低于此值即判「变了」（1.0=完全一致）。
-        const val SIMILARITY_THRESHOLD = 0.95
+        const val CHANGE_POLL_INTERVAL_MS = 100L
     }
 
     override fun onServiceConnected() {
@@ -106,6 +105,7 @@ class ClickerAccessibilityService : AccessibilityService() {
             val app = App.from(this@ClickerAccessibilityService)
             val data = app.scriptRepo.loadGraph(scriptId) ?: return@launch
             try {
+                clearDebugBitmaps()
                 runGraph(data, app.screenshotAi, app.aiTap, scriptId)
             } finally {
                 ServiceBus.playerState.value = ServiceBus.PlayerState.Idle
@@ -119,10 +119,17 @@ class ClickerAccessibilityService : AccessibilityService() {
         ServiceBus.playerState.value = ServiceBus.PlayerState.Idle
     }
 
+    private fun clearDebugBitmaps() {
+        runCatching {
+            filesDir.listFiles { file -> file.isFile && file.name.startsWith("dbg_") && file.name.endsWith(".png") }
+                ?.forEach { it.delete() }
+        }
+    }
+
     /**
      * 从 START 节点出发，沿边深度优先遍历执行图：
-     * - SNAPSHOT 节点把当前页面指纹存入以「名称」(aiPrompt) 为键的具名寄存器；
-     * - IF_PAGE_CHANGED 节点把当前指纹与「指定名称」的快照瞬时比较，变了走出口 0、没变走出口 1；
+     * - SNAPSHOT 节点把当前页面截图存入以「名称」(aiPrompt) 为键的具名寄存器；
+     * - IF_PAGE_CHANGED 节点把当前截图与「指定名称」的快照瞬时比较，变了走出口 0、没变走出口 1；
      *   指定的快照若尚未拍过，视为「没变」走出口 1；
      * - 其它节点执行后走出口 0。
      * 一个出口可连多条边：按连线顺序依次深度优先执行（先把第一条分支整支跑完，再下一条）。
@@ -148,10 +155,10 @@ class ClickerAccessibilityService : AccessibilityService() {
         }
         val startId = data.actions.firstOrNull { it.type == ActionType.START }?.id
             ?: data.actions.first().id
-        val baselines = HashMap<String, Int>()                  // 快照名称 -> 文字指纹（无范围/无截图时）
         val regionBmps = HashMap<String, android.graphics.Bitmap>()  // 快照名称 -> 区域截图（OpenCV 比较）
         // 快照名称 -> 范围矩形（取该名快照节点上设定的范围）。条件单快照比较时复用同一范围取实时页面。
         val snapRegions = HashMap<String, android.graphics.Rect?>()
+        var debugImageSeq = 0
         data.actions.forEach { a ->
             if (a.type == ActionType.SNAPSHOT) {
                 snapRegions[a.aiPrompt?.ifBlank { null } ?: "默认"] = regionOf(a)
@@ -183,68 +190,28 @@ class ClickerAccessibilityService : AccessibilityService() {
                     val key = node.aiPrompt?.ifBlank { null } ?: "默认"
                     val region = regionOf(node)
                     // 截图就绪时存截图做 OpenCV 比较；region=null 表示整屏。
-                    val bmp = if (ServiceBus.captureReady.value)
-                        regionCrop(region) else null
+                    val bmp = if (ServiceBus.captureReady.value) regionCrop(region) else null
                     if (bmp != null) {
                         regionBmps.remove(key)?.recycle()
                         regionBmps[key] = bmp
-                        baselines.remove(key)
                         // 调试：把区域图存盘，便于 adb 拉出来肉眼对比。
-                        runCatching {
-                            java.io.File(filesDir, "dbg_snap_$key.png").outputStream().use {
-                                bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
-                            }
-                        }
+                        saveDebugBitmap("dbg_snap_$key.png", bmp)
                         App.from(this@ClickerAccessibilityService)
                             .appendLog("SNAPSHOT[$key]=img ${bmp.width}x${bmp.height} region=$region")
                     } else {
-                        val fp = pageFingerprint(region)
-                        baselines[key] = fp
                         regionBmps.remove(key)?.recycle()
-                        App.from(this@ClickerAccessibilityService).appendLog("SNAPSHOT[$key]=$fp(text) region=$region")
+                        App.from(this@ClickerAccessibilityService)
+                            .appendLog("SNAPSHOT[$key] 失败：截图服务未就绪或截图超时 region=$region")
                     }
                     0
                 }
                 ActionType.IF_PAGE_CHANGED -> {
-                    val keyA = node.aiPrompt?.ifBlank { null } ?: "默认"
-                    val keyB = node.templatePath?.ifBlank { null }   // 复用字段存「快照B」名称
-                    val changed = when {
-                        // 双快照 + 区域图：OpenCV 相关度，低于阈值即变。
-                        keyB != null && regionBmps[keyA] != null && regionBmps[keyB] != null -> {
-                            val sim = RegionDiff.similarity(regionBmps[keyA]!!, regionBmps[keyB]!!)
-                            val c = sim != null && sim < SIMILARITY_THRESHOLD
-                            App.from(this@ClickerAccessibilityService)
-                                .appendLog("IF OpenCV 快照[$keyA]↔[$keyB] sim=${"%.3f".format(sim ?: -1.0)} changed=$c")
-                            c
-                        }
-                        // 双快照 + 文字指纹。
-                        keyB != null -> {
-                            val a = baselines[keyA]; val b = baselines[keyB]
-                            val c = a != null && b != null && a != b
-                            App.from(this@ClickerAccessibilityService)
-                                .appendLog("IF 快照[$keyA]=$a vs 快照[$keyB]=$b changed=$c")
-                            c
-                        }
-                        // 单快照 + 区域图：实时区域 vs 快照A。
-                        regionBmps[keyA] != null -> {
-                            val now = regionCrop(snapRegions[keyA])
-                            val sim = if (now != null) RegionDiff.similarity(regionBmps[keyA]!!, now) else null
-                            now?.recycle()
-                            val c = sim != null && sim < SIMILARITY_THRESHOLD
-                            App.from(this@ClickerAccessibilityService)
-                                .appendLog("IF OpenCV vs 快照[$keyA] sim=${"%.3f".format(sim ?: -1.0)} changed=$c")
-                            c
-                        }
-                        // 单快照 + 文字指纹。
-                        else -> {
-                            val base = baselines[keyA]
-                            val now = pageFingerprint(snapRegions[keyA])
-                            val c = base != null && now != base
-                            App.from(this@ClickerAccessibilityService)
-                                .appendLog("IF vs 快照[$keyA] changed=$c (now=$now base=$base)")
-                            c
-                        }
-                    }
+                    val changed = detectPageChanged(
+                        node = node,
+                        regionBmps = regionBmps,
+                        snapRegions = snapRegions,
+                        nextDebugSeq = { ++debugImageSeq },
+                    )
                     if (changed) 0 else 1
                 }
                 ActionType.IF_IMAGE_EXISTS -> {
@@ -293,6 +260,96 @@ class ClickerAccessibilityService : AccessibilityService() {
         }
     }
 
+    private suspend fun detectPageChanged(
+        node: Action,
+        regionBmps: Map<String, android.graphics.Bitmap>,
+        snapRegions: Map<String, android.graphics.Rect?>,
+        nextDebugSeq: () -> Int,
+    ): Boolean {
+        val keyA = node.aiPrompt?.ifBlank { null } ?: "默认"
+        val keyB = node.templatePath?.ifBlank { null }   // 复用字段存「快照B」名称
+        val threshold = node.matchThreshold.coerceIn(0.1f, 1f)
+        val timeoutMs = node.durationMs.coerceAtLeast(0L)
+        val startedAt = android.os.SystemClock.uptimeMillis()
+        var attempt = 0
+        var lastFrameId = -1L
+        val useStream = timeoutMs > 0L && keyB == null
+
+        suspend fun once(): Boolean {
+            attempt += 1
+            return when {
+                // 双快照图片：OpenCV 相关度，低于阈值即变。
+                keyB != null && regionBmps[keyA] != null && regionBmps[keyB] != null -> {
+                    val match = RegionDiff.compare(regionBmps[keyA]!!, regionBmps[keyB]!!)
+                    val c = match != null && match.score < threshold
+                    App.from(this@ClickerAccessibilityService)
+                        .appendLog(
+                            "IF OpenCV 快照[$keyA]↔[$keyB] " +
+                                "attempt=$attempt sim=${"%.3f".format(match?.score ?: -1.0)} " +
+                                "shift=(${match?.offsetX ?: 0},${match?.offsetY ?: 0}) " +
+                                "thr=$threshold changed=$c"
+                        )
+                    c
+                }
+                keyB != null -> {
+                    App.from(this@ClickerAccessibilityService)
+                        .appendLog("IF 快照[$keyA]↔[$keyB] 缺少图片基准，changed=false")
+                    false
+                }
+                regionBmps[keyA] != null -> {
+                    val now = if (useStream) {
+                        streamRegionCrop(snapRegions[keyA], lastFrameId)?.also {
+                            lastFrameId = it.first
+                        }?.second
+                    } else {
+                        regionCrop(snapRegions[keyA])
+                    }
+                    val nowDebugName = if (now != null) "dbg_now_${keyA}_${nextDebugSeq()}.png" else null
+                    if (now != null && nowDebugName != null) saveDebugBitmap(nowDebugName, now)
+                    val match = if (now != null) RegionDiff.compare(regionBmps[keyA]!!, now) else null
+                    now?.recycle()
+                    val c = match != null && match.score < threshold
+                    App.from(this@ClickerAccessibilityService)
+                        .appendLog(
+                            "IF OpenCV vs 快照[$keyA] " +
+                                "attempt=$attempt sim=${"%.3f".format(match?.score ?: -1.0)} " +
+                                "shift=(${match?.offsetX ?: 0},${match?.offsetY ?: 0}) " +
+                                "thr=$threshold changed=$c now=$nowDebugName"
+                        )
+                    c
+                }
+                else -> {
+                    App.from(this@ClickerAccessibilityService)
+                        .appendLog("IF vs 快照[$keyA] 缺少图片基准，changed=false")
+                    false
+                }
+            }
+        }
+
+        if (timeoutMs <= 0L || keyB != null) return once()
+        ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.StartStream)
+        return try {
+            while (scope.isActive) {
+                if (once()) return true
+                val elapsed = android.os.SystemClock.uptimeMillis() - startedAt
+                val remaining = timeoutMs - elapsed
+                if (remaining <= 0L) return false
+                delay(minOf(CHANGE_POLL_INTERVAL_MS, remaining.coerceAtLeast(1L)))
+            }
+            false
+        } finally {
+            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.StopStream)
+        }
+    }
+
+    private fun saveDebugBitmap(name: String, bmp: android.graphics.Bitmap) {
+        runCatching {
+            java.io.File(filesDir, name).outputStream().use {
+                bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+            }
+        }
+    }
+
     /** 截屏并裁出区域 Bitmap（按屏幕像素映射到截图分辨率）。截图不可用返回 null。 */
     private suspend fun regionCrop(region: android.graphics.Rect?): android.graphics.Bitmap? {
         val bmp = withTimeoutOrNull(3_000) {
@@ -300,6 +357,24 @@ class ClickerAccessibilityService : AccessibilityService() {
             ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture)
             ServiceBus.lastBitmap.first { it != null }
         } ?: return null
+        return cropBitmap(bmp, region)
+    }
+
+    private suspend fun streamRegionCrop(
+        region: android.graphics.Rect?,
+        previousFrameId: Long,
+    ): Pair<Long, android.graphics.Bitmap>? {
+        val frame = withTimeoutOrNull(1_000) {
+            ServiceBus.streamFrame.first { it != null && it.id != previousFrameId }
+        } ?: return null
+        val crop = cropBitmap(frame.bitmap, region) ?: return null
+        return frame.id to crop
+    }
+
+    private suspend fun cropBitmap(
+        bmp: android.graphics.Bitmap,
+        region: android.graphics.Rect?,
+    ): android.graphics.Bitmap? {
         return withContext(Dispatchers.Default) {
             val dm = resources.displayMetrics
             val sx = bmp.width.toFloat() / dm.widthPixels.coerceAtLeast(1)
@@ -317,40 +392,6 @@ class ClickerAccessibilityService : AccessibilityService() {
         if (node.endX > node.startX && node.endY > node.startY)
             android.graphics.Rect(node.startX.toInt(), node.startY.toInt(), node.endX.toInt(), node.endY.toInt())
         else null
-
-    /**
-     * 当前活动窗口的「文字内容指纹」：只统计有文字或 contentDescription 的可见节点
-     * （自动跳过空的整屏容器），拼接 className + text + contentDescription 取 hash。
-     * 不含边界坐标——忽略位移/滚动/动画/重渲染带来的纯视觉变化，只在意文字内容是否变。
-     * [region] 非空时只统计「节点中心落在该矩形内」的节点：既纳入条带里的列表项，
-     * 又排除中心在别处的整屏容器。
-     */
-    private suspend fun pageFingerprint(region: android.graphics.Rect? = null): Int =
-        withContext(Dispatchers.Main.immediate) {
-            val root = rootInActiveWindow ?: return@withContext 0
-            val sb = StringBuilder()
-            val rect = android.graphics.Rect()
-            fun walk(node: AccessibilityNodeInfo?) {
-                if (node == null) return
-                if (node.isVisibleToUser) {
-                    val text = node.text?.toString().orEmpty()
-                    val desc = node.contentDescription?.toString().orEmpty()
-                    if (text.isNotBlank() || desc.isNotBlank()) {
-                        node.getBoundsInScreen(rect)
-                        val inRegion = region == null ||
-                            region.contains((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)
-                        if (inRegion) {
-                            sb.append(node.className).append('|')
-                                .append(text).append('|')
-                                .append(desc).append(';')
-                        }
-                    }
-                }
-                for (i in 0 until node.childCount) walk(node.getChild(i))
-            }
-            walk(root)
-            sb.toString().hashCode()
-        }
 
     /** 当前活动窗口的可见控件树里，是否有节点的 text 或 contentDescription 包含 [target]（忽略大小写）。 */
     private suspend fun screenHasText(target: String): Boolean =

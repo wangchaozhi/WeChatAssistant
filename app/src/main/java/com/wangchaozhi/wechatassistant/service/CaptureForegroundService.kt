@@ -44,6 +44,9 @@ class CaptureForegroundService : LifecycleService() {
     private var widthPx: Int = 0
     private var heightPx: Int = 0
     private var densityDpi: Int = 0
+    private var streaming = false
+    private var streamHidOverlay = false
+    private var streamFrameId = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -55,6 +58,8 @@ class CaptureForegroundService : LifecycleService() {
                         val bmp = captureExcludingOverlay()
                         ServiceBus.lastBitmap.value = bmp
                     }
+                    ServiceBus.CaptureCmd.StartStream -> startFrameStream()
+                    ServiceBus.CaptureCmd.StopStream -> stopFrameStream()
                     is ServiceBus.CaptureCmd.TakeAndAsk -> {
                         val app = App.from(this@CaptureForegroundService)
                         app.appendLog("TakeAndAsk start, prompt='${cmd.prompt}'")
@@ -192,7 +197,38 @@ class CaptureForegroundService : LifecycleService() {
         }
     }
 
+    private fun startFrameStream() {
+        if (streaming) return
+        val reader = imageReader ?: return
+        streaming = true
+        ServiceBus.streamFrame.value = null
+        streamHidOverlay = ServiceBus.overlayReady.value
+        if (streamHidOverlay) ServiceBus.overlayHidden.value = true
+        bgHandler?.postDelayed({
+            if (!streaming) return@postDelayed
+            drainBuffer()
+            reader.setOnImageAvailableListener({ r ->
+                val bmp = runCatching {
+                    r.acquireLatestImage()?.use { imageToBitmap(it) }
+                }.getOrNull()
+                if (bmp != null) {
+                    ServiceBus.streamFrame.value =
+                        ServiceBus.CaptureFrame(++streamFrameId, bmp)
+                }
+            }, bgHandler)
+        }, if (streamHidOverlay) 180L else 0L)
+    }
+
+    private fun stopFrameStream() {
+        if (!streaming) return
+        streaming = false
+        imageReader?.setOnImageAvailableListener(null, null)
+        if (streamHidOverlay) ServiceBus.overlayHidden.value = false
+        streamHidOverlay = false
+    }
+
     private suspend fun capture(): Bitmap? = withContext(Dispatchers.Default) {
+        stopFrameStream()
         val reader = imageReader ?: return@withContext null
         runCatching {
             reader.acquireLatestImage()?.use { img ->
@@ -228,6 +264,7 @@ class CaptureForegroundService : LifecycleService() {
     }
 
     private fun releaseProjection() {
+        stopFrameStream()
         virtualDisplay?.release(); virtualDisplay = null
         imageReader?.close(); imageReader = null
         projection?.stop(); projection = null

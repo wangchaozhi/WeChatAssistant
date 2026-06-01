@@ -58,6 +58,29 @@ class App : Application() {
         }
     }
 
+    fun readLog(maxChars: Int = 60_000): String =
+        runCatching {
+            if (!logFile.exists()) return@runCatching ""
+            val text = logFile.readText()
+            if (text.length <= maxChars) text else text.takeLast(maxChars)
+        }.getOrDefault("")
+
+    fun clearLog() {
+        runCatching { logFile.writeText("") }
+    }
+
+    fun logFileSizeBytes(): Long =
+        runCatching { if (logFile.exists()) logFile.length() else 0L }.getOrDefault(0L)
+
+    fun debugBitmapFiles(): List<File> =
+        runCatching {
+            filesDir.listFiles { file ->
+                file.isFile && file.name.startsWith("dbg_") && file.name.endsWith(".png")
+            }
+                ?.sortedWith(compareBy<File> { it.name.removePrefix("dbg_") }.thenBy { it.lastModified() })
+                .orEmpty()
+        }.getOrDefault(emptyList())
+
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
