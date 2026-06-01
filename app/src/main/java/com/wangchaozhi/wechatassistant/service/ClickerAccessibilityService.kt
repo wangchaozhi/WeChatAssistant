@@ -157,8 +157,15 @@ class ClickerAccessibilityService : AccessibilityService() {
                 snapRegions[a.aiPrompt?.ifBlank { null } ?: "默认"] = regionOf(a)
             }
         }
+        // 整体循环次数：从 START 起把整张图重跑 loopCount 遍（<1 视为 1）。
+        // 每遍独立重置栈/进度/步数；图内回指边形成的内部循环不受影响。
+        val loops = script.loopCount.coerceAtLeast(1)
+        run@ for (loop in 0 until loops) {
+        if (!scope.isActive) break@run
         val stack = ArrayDeque<Long>()
         stack.addLast(startId)
+        // LOOP 节点的计数器：nodeId -> 已进入循环体次数。每一遍整图执行独立重置。
+        val loopCounters = HashMap<Long, Int>()
         var visited = 0
         var steps = 0
         while (scope.isActive && stack.isNotEmpty()) {
@@ -240,6 +247,36 @@ class ClickerAccessibilityService : AccessibilityService() {
                     }
                     if (changed) 0 else 1
                 }
+                ActionType.IF_IMAGE_EXISTS -> {
+                    val path = node.templatePath?.ifBlank { null }
+                    val found = path != null && App.from(this@ClickerAccessibilityService)
+                        .templateMatch.locate(path, node.matchThreshold).isSuccess
+                    App.from(this@ClickerAccessibilityService)
+                        .appendLog("IF_IMAGE_EXISTS thr=${node.matchThreshold} found=$found")
+                    if (found) 0 else 1
+                }
+                ActionType.IF_TEXT_EXISTS -> {
+                    val target = node.aiPrompt?.ifBlank { null }
+                    val found = target != null && screenHasText(target)
+                    App.from(this@ClickerAccessibilityService)
+                        .appendLog("IF_TEXT_EXISTS [$target] found=$found")
+                    if (found) 0 else 1
+                }
+                ActionType.LOOP -> {
+                    val n = node.retryCount.coerceAtLeast(1)
+                    val c = loopCounters[node.id] ?: 0
+                    if (c < n) {
+                        loopCounters[node.id] = c + 1
+                        0   // 继续：进入循环体（第 ${c + 1}/$n 次）
+                    } else {
+                        loopCounters[node.id] = 0   // 复位，便于该节点被再次进入时重新计数
+                        1   // 到次数：往下走
+                    }
+                }
+                ActionType.STOP -> {
+                    App.from(this@ClickerAccessibilityService).appendLog("STOP 节点：终止整图执行")
+                    break@run
+                }
                 else -> {
                     execute(node, ai, tap, scriptId)
                     0
@@ -250,8 +287,9 @@ class ClickerAccessibilityService : AccessibilityService() {
             for (i in targets.indices.reversed()) stack.addLast(targets[i])
             if (++steps > MAX_GRAPH_STEPS) {
                 App.from(this@ClickerAccessibilityService).appendLog("runGraph: 步数超上限，停止")
-                break
+                break@run
             }
+        }
         }
     }
 
@@ -314,6 +352,27 @@ class ClickerAccessibilityService : AccessibilityService() {
             sb.toString().hashCode()
         }
 
+    /** 当前活动窗口的可见控件树里，是否有节点的 text 或 contentDescription 包含 [target]（忽略大小写）。 */
+    private suspend fun screenHasText(target: String): Boolean =
+        withContext(Dispatchers.Main.immediate) {
+            val root = rootInActiveWindow ?: return@withContext false
+            val needle = target.trim()
+            if (needle.isEmpty()) return@withContext false
+            fun walk(node: AccessibilityNodeInfo?): Boolean {
+                if (node == null) return false
+                if (node.isVisibleToUser) {
+                    val text = node.text?.toString().orEmpty()
+                    val desc = node.contentDescription?.toString().orEmpty()
+                    if (text.contains(needle, ignoreCase = true) ||
+                        desc.contains(needle, ignoreCase = true)
+                    ) return true
+                }
+                for (i in 0 until node.childCount) if (walk(node.getChild(i))) return true
+                return false
+            }
+            walk(root)
+        }
+
     private suspend fun execute(
         action: Action,
         ai: ScreenshotAiUseCase,
@@ -322,7 +381,12 @@ class ClickerAccessibilityService : AccessibilityService() {
     ) {
         when (action.type) {
             ActionType.TAP, ActionType.LONG_PRESS, ActionType.SWIPE -> performGesture(action)
-            ActionType.WAIT -> delay(action.durationMs)
+            ActionType.WAIT -> {
+                // 随机抖动：在固定时长之上额外等 0~randomExtraMs 毫秒，模拟真人节奏。
+                val extra = if (action.randomExtraMs > 0)
+                    kotlin.random.Random.nextLong(action.randomExtraMs + 1) else 0L
+                delay(action.durationMs + extra)
+            }
             ActionType.SCREENSHOT_AI -> {
                 val prompt = action.aiPrompt
                     ?: App.from(this@ClickerAccessibilityService).settingsRepo.defaultPrompt
@@ -373,7 +437,11 @@ class ClickerAccessibilityService : AccessibilityService() {
             ActionType.WAIT_PAGE_CHANGE,
             ActionType.START,
             ActionType.SNAPSHOT,
-            ActionType.IF_PAGE_CHANGED -> Unit
+            ActionType.IF_PAGE_CHANGED,
+            ActionType.IF_IMAGE_EXISTS,
+            ActionType.IF_TEXT_EXISTS,
+            ActionType.LOOP,
+            ActionType.STOP -> Unit
         }
     }
 

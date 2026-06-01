@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -49,6 +52,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.Canvas
@@ -68,14 +72,21 @@ private const val PORT_HIT = 48f   // 连线落点命中输入端口的 dp 半�
 // reversed=true ：从某节点输入口(anchorId)拖向源节点输出口。
 private data class Wiring(val anchorId: Long, val port: Int, val end: Offset, val reversed: Boolean = false)
 
-/** 节点的输出端口列表（IF 有两个，其它一个）。 */
-private fun outPorts(n: Action): List<Int> =
-    if (n.type == ActionType.IF_PAGE_CHANGED) listOf(0, 1) else listOf(0)
+/** 双出口节点：条件节点（变/有）和循环节点（环/完）。 */
+private fun isTwoPort(t: ActionType): Boolean = t == ActionType.IF_PAGE_CHANGED ||
+    t == ActionType.IF_IMAGE_EXISTS || t == ActionType.IF_TEXT_EXISTS || t == ActionType.LOOP
+
+/** 节点的输出端口列表（双出口节点两个，STOP 无出口，其它一个）。 */
+private fun outPorts(n: Action): List<Int> = when {
+    n.type == ActionType.STOP -> emptyList()
+    isTwoPort(n.type) -> listOf(0, 1)
+    else -> listOf(0)
+}
 
 private fun inAnchor(n: Action) = Offset(n.posX + NODE_W / 2, n.posY)
 private fun outAnchor(n: Action, port: Int): Offset = when {
-    n.type == ActionType.IF_PAGE_CHANGED && port == 0 -> Offset(n.posX + NODE_W * 0.3f, n.posY + NODE_H)
-    n.type == ActionType.IF_PAGE_CHANGED && port == 1 -> Offset(n.posX + NODE_W * 0.7f, n.posY + NODE_H)
+    isTwoPort(n.type) && port == 0 -> Offset(n.posX + NODE_W * 0.3f, n.posY + NODE_H)
+    isTwoPort(n.type) && port == 1 -> Offset(n.posX + NODE_W * 0.7f, n.posY + NODE_H)
     else -> Offset(n.posX + NODE_W / 2, n.posY + NODE_H)
 }
 
@@ -244,8 +255,8 @@ fun GraphEditorScreen(
                         val a = outAnchor(from, e.fromPort) * density
                         val b = inAnchor(to) * density
                         val color = when {
-                            from.type == ActionType.IF_PAGE_CHANGED && e.fromPort == 0 -> Color(0xFF2E7D32)
-                            from.type == ActionType.IF_PAGE_CHANGED && e.fromPort == 1 -> Color(0xFFC62828)
+                            isTwoPort(from.type) && e.fromPort == 0 -> Color(0xFF2E7D32)
+                            isTwoPort(from.type) && e.fromPort == 1 -> Color(0xFFC62828)
                             else -> Color(0xFF607D8B)
                         }
                         drawCurve(a, b, color)
@@ -337,9 +348,18 @@ fun GraphEditorScreen(
                             onEnd = onPortEnd,
                         )
                     }
-                    val outs = if (node.type == ActionType.IF_PAGE_CHANGED)
-                        listOf(0 to "是" to Color(0xFF66BB6A), 1 to "否" to Color(0xFFEF5350))
-                    else listOf(0 to "" to Color.White)
+                    val green = Color(0xFF66BB6A)
+                    val red = Color(0xFFEF5350)
+                    val outs = when (node.type) {
+                        ActionType.IF_PAGE_CHANGED ->
+                            listOf(0 to "是" to green, 1 to "否" to red)
+                        ActionType.IF_IMAGE_EXISTS, ActionType.IF_TEXT_EXISTS ->
+                            listOf(0 to "有" to green, 1 to "无" to red)
+                        ActionType.LOOP ->
+                            listOf(0 to "环" to green, 1 to "完" to red)
+                        ActionType.STOP -> emptyList()
+                        else -> listOf(0 to "" to Color.White)
+                    }
                     outs.forEach { (pl, color) ->
                         val (port, label) = pl
                         OutPortHandle(
@@ -492,7 +512,11 @@ private fun NodeCard(
     val color = when (node.type) {
         ActionType.START -> Color(0xFF1B5E20)
         ActionType.SNAPSHOT -> Color(0xFF4527A0)
-        ActionType.IF_PAGE_CHANGED -> Color(0xFFE65100)
+        ActionType.IF_PAGE_CHANGED,
+        ActionType.IF_IMAGE_EXISTS,
+        ActionType.IF_TEXT_EXISTS -> Color(0xFFE65100)
+        ActionType.LOOP -> Color(0xFF00838F)
+        ActionType.STOP -> Color(0xFFB71C1C)
         else -> Color(0xFF37474F)
     }
     Box(
@@ -536,6 +560,27 @@ private fun NodeCard(
             if (node.type == ActionType.SCREENSHOT_AI || node.type == ActionType.AI_TAP) {
                 Text(
                     aiModelLabel(node),
+                    color = Color(0xCCFFFFFF),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            if (node.type == ActionType.IF_IMAGE_EXISTS) {
+                Text(
+                    if (node.templatePath != null) "▣模板 · 阈值${"%.2f".format(node.matchThreshold)}" else "⚠ 未设模板",
+                    color = Color(0xCCFFFFFF),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            if (node.type == ActionType.IF_TEXT_EXISTS) {
+                Text(
+                    "「${node.aiPrompt?.ifBlank { null } ?: "?"}」",
+                    color = Color(0xCCFFFFFF),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            if (node.type == ActionType.LOOP) {
+                Text(
+                    "× ${node.retryCount}",
                     color = Color(0xCCFFFFFF),
                     style = MaterialTheme.typography.labelSmall,
                 )
@@ -589,23 +634,65 @@ private fun NodeActionRow(text: String, danger: Boolean = false, onClick: () -> 
     )
 }
 
+// 加节点菜单：按类别二级折叠，默认只显示分组标题，点开才列出该组节点，减少高度与误触。
+private val NODE_GROUPS: List<Pair<String, List<Pair<ActionType, String>>>> = listOf(
+    "基础操作" to listOf(
+        ActionType.TAP to "点击",
+        ActionType.SWIPE to "滑动",
+        ActionType.LONG_PRESS to "长按",
+        ActionType.WAIT to "等待",
+        ActionType.PASTE to "粘贴",
+        ActionType.ENTER to "回车",
+    ),
+    "找图 / AI" to listOf(
+        ActionType.SCREENSHOT_AI to "AI 截图问答",
+        ActionType.AI_TAP to "AI 找图点击",
+        ActionType.IMAGE_MATCH to "找图点击（模板）",
+    ),
+    "快照 / 条件" to listOf(
+        ActionType.SNAPSHOT to "快照（记基准）",
+        ActionType.IF_PAGE_CHANGED to "页面是否变化",
+        ActionType.IF_IMAGE_EXISTS to "图像是否存在",
+        ActionType.IF_TEXT_EXISTS to "文字是否存在",
+    ),
+    "流程控制" to listOf(
+        ActionType.LOOP to "循环 N 次",
+        ActionType.STOP to "停止",
+    ),
+)
+
 @Composable
 private fun AddNodeMenu(expanded: Boolean, onDismiss: () -> Unit, onPick: (ActionType) -> Unit) {
+    // 每次重新打开菜单都回到「全部折叠」。
+    var openGroup by remember(expanded) { mutableStateOf<String?>(null) }
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        listOf(
-            ActionType.TAP to "点击",
-            ActionType.SWIPE to "滑动",
-            ActionType.LONG_PRESS to "长按",
-            ActionType.WAIT to "等待",
-            ActionType.PASTE to "粘贴",
-            ActionType.ENTER to "回车",
-            ActionType.SCREENSHOT_AI to "AI 截图问答",
-            ActionType.AI_TAP to "AI 找图点击",
-            ActionType.IMAGE_MATCH to "找图点击（模板）",
-            ActionType.SNAPSHOT to "快照（记基准）",
-            ActionType.IF_PAGE_CHANGED to "条件：页面是否变化",
-        ).forEach { (type, label) ->
-            DropdownMenuItem(text = { Text(label) }, onClick = { onPick(type) })
+        NODE_GROUPS.forEach { (title, items) ->
+            val isOpen = openGroup == title
+            DropdownMenuItem(
+                text = {
+                    Text(title, style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold)
+                },
+                trailingIcon = {
+                    Icon(
+                        if (isOpen) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        null,
+                    )
+                },
+                onClick = { openGroup = if (isOpen) null else title },
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                modifier = Modifier.height(38.dp),
+            )
+            if (isOpen) {
+                items.forEach { (type, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label, style = MaterialTheme.typography.bodyMedium) },
+                        onClick = { onPick(type) },
+                        contentPadding = PaddingValues(start = 28.dp, end = 12.dp),
+                        modifier = Modifier.height(34.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -614,6 +701,7 @@ private fun AddNodeMenu(expanded: Boolean, onDismiss: () -> Unit, onPick: (Actio
 private fun ScriptMetaDialog(script: Script, onDismiss: () -> Unit, onConfirm: (Script) -> Unit) {
     var name by remember { mutableStateOf(script.name) }
     var speedText by remember { mutableStateOf(script.speed.toString()) }
+    var loopText by remember { mutableStateOf(script.loopCount.toString()) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("脚本信息") },
@@ -629,14 +717,24 @@ private fun ScriptMetaDialog(script: Script, onDismiss: () -> Unit, onConfirm: (
                     onValueChange = { raw -> speedText = raw.filter { it.isDigit() || it == '.' } },
                     label = { Text("速度倍率") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 )
+                androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = loopText,
+                    onValueChange = { raw -> loopText = raw.filter { it.isDigit() } },
+                    label = { Text("整体循环次数") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                )
                 androidx.compose.foundation.layout.Spacer(Modifier.height(4.dp))
-                Text("循环已由连线回指实现，循环次数设置在节点图中忽略。",
+                Text("整体循环次数：从入口把整张图重跑指定遍数。图内连线回指形成的内部循环不受影响。",
                     style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {
             Button(onClick = {
-                onConfirm(script.copy(name = name, speed = (speedText.toFloatOrNull() ?: script.speed).coerceIn(0.1f, 10f)))
+                onConfirm(script.copy(
+                    name = name,
+                    speed = (speedText.toFloatOrNull() ?: script.speed).coerceIn(0.1f, 10f),
+                    loopCount = (loopText.toIntOrNull() ?: script.loopCount).coerceAtLeast(1),
+                ))
             }) { Text("确定") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },

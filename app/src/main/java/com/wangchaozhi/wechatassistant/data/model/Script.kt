@@ -20,6 +20,10 @@ enum class ActionType {
     START,            // 图入口节点，执行时 no-op
     SNAPSHOT,         // 抓当前页面指纹存入基准寄存器
     IF_PAGE_CHANGED,  // 比较当前指纹与基准，瞬时返回；出口 port 0=变了 / 1=没变
+    IF_IMAGE_EXISTS,  // 模板图在当前屏幕是否存在；出口 port 0=找到 / 1=没找到。只判断不点击。
+    IF_TEXT_EXISTS,   // aiPrompt 文字是否出现在当前页面控件树；出口 port 0=找到 / 1=没找到。
+    LOOP,             // 计数循环：retryCount 为次数。出口 port 0=继续(回循环体) / 1=到次数(往下)。
+    STOP,             // 终止整张图的执行（从任意分支提前结束）。
 }
 
 @Entity(
@@ -45,6 +49,8 @@ data class Action(
     val endY: Float = startY,
     val durationMs: Long = 80L,
     val delayBeforeMs: Long = 0L,
+    // WAIT 专用：在 durationMs 之上额外随机等待 0~randomExtraMs 毫秒，模拟真人、降低被识别风险。0=不抖动。
+    val randomExtraMs: Long = 0L,
     val aiPrompt: String? = null,
     // IMAGE_MATCH 专用：模板图片在内部存储的绝对路径，以及匹配置信度阈值 (0~1)。
     val templatePath: String? = null,
