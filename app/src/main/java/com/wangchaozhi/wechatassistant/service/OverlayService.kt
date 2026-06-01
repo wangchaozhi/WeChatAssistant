@@ -79,6 +79,9 @@ class OverlayService : LifecycleService() {
     private var collapsedHandle: View? = null
     private var collapsed = false
     private val adbReader by lazy { WifiAdbTouchReader(this) }
+    // 「边录边放」注入进行中：FLAG_NOT_TOUCHABLE 异步生效，注入的那一下可能在生效前又被本层抓到，
+    // 用它做重入保护，避免一个手势被录两次/注入两次。
+    @Volatile private var injecting = false
     // 悬浮层录制：全屏透明捕获层及其窗口参数。
     private var recordOverlay: RecordOverlayView? = null
     private var recordOverlayParams: WindowManager.LayoutParams? = null
@@ -782,14 +785,19 @@ class OverlayService : LifecycleService() {
 
     /** 录制层捕获到一个完整手势：先记进脚本，再「边录边放」投给真实 App。 */
     private fun onOverlayGesture(raw: ServiceBus.RawTouch) {
-        if (!recording || suppressTouchRecording) return
+        if (!recording || suppressTouchRecording || injecting) return
         if (isOnPanel(raw.startX, raw.startY)) return
+        // 重入保护要同步置位：注入回放的那一下若赶在 FLAG_NOT_TOUCHABLE 生效前到达，会再触发本回调。
+        injecting = true
         // 记录走既有管线（onCreate 里的 recordedTap 收集器）。
         ServiceBus.recordedTap.tryEmit(raw)
         lifecycleScope.launch {
             // 注入期间放行：切非触摸，否则 dispatchGesture 会被本录制层再次截获。
             setRecordOverlayTouchable(false)
             try {
+                // FLAG_NOT_TOUCHABLE 经 updateViewLayout 异步生效，必须等它真正落地，
+                // 注入才会打到底层 App 而不是本录制层自己。
+                kotlinx.coroutines.delay(FLAG_APPLY_DELAY_MS)
                 ServiceBus.recordInject.emit(raw)
                 kotlinx.coroutines.withTimeoutOrNull(
                     raw.durationMs + INJECT_EXTRA_TIMEOUT_MS
@@ -798,6 +806,7 @@ class OverlayService : LifecycleService() {
                 kotlinx.coroutines.delay(INJECT_SETTLE_MS)
             } finally {
                 setRecordOverlayTouchable(true)
+                injecting = false
             }
         }
     }
@@ -1244,6 +1253,8 @@ class OverlayService : LifecycleService() {
 
     companion object {
         private const val NOTIF_ID = 0x10A2
+        // 切 FLAG_NOT_TOUCHABLE 后等它经 WindowManager 落地的时间，之后再注入。约 4 帧。
+        private const val FLAG_APPLY_DELAY_MS = 64L
         // 注入超时 = 手势时长 + 这点富余（等无障碍回 done）。
         private const val INJECT_EXTRA_TIMEOUT_MS = 1_500L
         // 注入后留给真实 App 完成跳转/动画的安定时间，再恢复采集。
