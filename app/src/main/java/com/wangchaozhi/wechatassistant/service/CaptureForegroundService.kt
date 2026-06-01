@@ -47,6 +47,7 @@ class CaptureForegroundService : LifecycleService() {
     private var streaming = false
     private var streamHidOverlay = false
     private var streamFrameId = 0L
+    private var lastStreamEmitMs = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -201,6 +202,7 @@ class CaptureForegroundService : LifecycleService() {
         if (streaming) return
         val reader = imageReader ?: return
         streaming = true
+        lastStreamEmitMs = 0L
         ServiceBus.streamFrame.value = null
         streamHidOverlay = ServiceBus.overlayReady.value
         if (streamHidOverlay) ServiceBus.overlayHidden.value = true
@@ -208,9 +210,18 @@ class CaptureForegroundService : LifecycleService() {
             if (!streaming) return@postDelayed
             drainBuffer()
             reader.setOnImageAvailableListener({ r ->
-                val bmp = runCatching {
-                    r.acquireLatestImage()?.use { imageToBitmap(it) }
-                }.getOrNull()
+                val img = runCatching { r.acquireLatestImage() }.getOrNull()
+                    ?: return@setOnImageAvailableListener
+                // 限流：始终取走并释放帧，避免 ImageReader 缓冲占满后停止产帧；
+                // 但仅按最小间隔构建整屏位图，省掉 60fps 全屏 Bitmap 分配带来的 GC 压力。
+                // 页面变化是持续态而非瞬时闪烁，间隔内丢帧不影响检出。
+                val nowMs = android.os.SystemClock.uptimeMillis()
+                if (nowMs - lastStreamEmitMs < STREAM_MIN_INTERVAL_MS) {
+                    img.close()
+                    return@setOnImageAvailableListener
+                }
+                lastStreamEmitMs = nowMs
+                val bmp = runCatching { img.use { imageToBitmap(it) } }.getOrNull()
                 if (bmp != null) {
                     ServiceBus.streamFrame.value =
                         ServiceBus.CaptureFrame(++streamFrameId, bmp)
@@ -282,6 +293,10 @@ class CaptureForegroundService : LifecycleService() {
         private const val NOTIF_ID = 0x10A1
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_DATA = "data"
+
+        // 流式帧的最小产帧间隔（毫秒）。约 40fps：足够低的检出延迟，又避免每个刷新帧
+        // 都构建整屏位图。变化检测无需 60fps，调大可进一步省电、调小可降延迟。
+        private const val STREAM_MIN_INTERVAL_MS = 25L
 
         fun start(context: Context, resultCode: Int, data: Intent) {
             val intent = Intent(context, CaptureForegroundService::class.java)

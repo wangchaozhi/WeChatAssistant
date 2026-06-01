@@ -40,7 +40,6 @@ class ClickerAccessibilityService : AccessibilityService() {
     private companion object {
         // 图遍历硬上限，防止无条件节点把关的环导致死循环。
         const val MAX_GRAPH_STEPS = 100_000
-        const val CHANGE_POLL_INTERVAL_MS = 100L
     }
 
     override fun onServiceConnected() {
@@ -167,6 +166,7 @@ class ClickerAccessibilityService : AccessibilityService() {
         // 整体循环次数：从 START 起把整张图重跑 loopCount 遍（<1 视为 1）。
         // 每遍独立重置栈/进度/步数；图内回指边形成的内部循环不受影响。
         val loops = script.loopCount.coerceAtLeast(1)
+        try {
         run@ for (loop in 0 until loops) {
         if (!scope.isActive) break@run
         val stack = ArrayDeque<Long>()
@@ -258,6 +258,11 @@ class ClickerAccessibilityService : AccessibilityService() {
             }
         }
         }
+        } finally {
+            // 统一收尾：无论正常结束、STOP 跳出还是步数超限，都关掉可能仍开着的截图流。
+            // detectPageChanged 不再自行 StopStream，连续 IF 节点复用同一路流、不重复预热。
+            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.StopStream)
+        }
     }
 
     private suspend fun detectPageChanged(
@@ -270,11 +275,9 @@ class ClickerAccessibilityService : AccessibilityService() {
         val keyB = node.templatePath?.ifBlank { null }   // 复用字段存「快照B」名称
         val threshold = node.matchThreshold.coerceIn(0.1f, 1f)
         val timeoutMs = node.durationMs.coerceAtLeast(0L)
-        val startedAt = android.os.SystemClock.uptimeMillis()
         var attempt = 0
-        var lastFrameId = -1L
-        val useStream = timeoutMs > 0L && keyB == null
 
+        // 单次瞬时比较：双快照 / 时长<=0 走这里，截取实时页面一次即出结果。
         suspend fun once(): Boolean {
             attempt += 1
             return when {
@@ -297,13 +300,7 @@ class ClickerAccessibilityService : AccessibilityService() {
                     false
                 }
                 regionBmps[keyA] != null -> {
-                    val now = if (useStream) {
-                        streamRegionCrop(snapRegions[keyA], lastFrameId)?.also {
-                            lastFrameId = it.first
-                        }?.second
-                    } else {
-                        regionCrop(snapRegions[keyA])
-                    }
+                    val now = regionCrop(snapRegions[keyA])
                     val nowDebugName = if (now != null) "dbg_now_${keyA}_${nextDebugSeq()}.png" else null
                     if (now != null && nowDebugName != null) saveDebugBitmap(nowDebugName, now)
                     val match = if (now != null) RegionDiff.compare(regionBmps[keyA]!!, now) else null
@@ -327,19 +324,40 @@ class ClickerAccessibilityService : AccessibilityService() {
         }
 
         if (timeoutMs <= 0L || keyB != null) return once()
-        ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.StartStream)
-        return try {
-            while (scope.isActive) {
-                if (once()) return true
-                val elapsed = android.os.SystemClock.uptimeMillis() - startedAt
-                val remaining = timeoutMs - elapsed
-                if (remaining <= 0L) return false
-                delay(minOf(CHANGE_POLL_INTERVAL_MS, remaining.coerceAtLeast(1L)))
-            }
-            false
-        } finally {
-            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.StopStream)
+
+        // 单快照 + 时长>0：事件驱动地跟随截图流，每来一帧就和基准比一次，一旦变化立即返回。
+        // 不再固定 100ms 轮询 sleep——检出延迟压到「一帧 + 比较」级别。
+        // streamFrame 是 conflated StateFlow，慢消费者只取最新帧，天然限流、不会积压。
+        val baseline = regionBmps[keyA]
+        if (baseline == null) {
+            App.from(this@ClickerAccessibilityService)
+                .appendLog("IF vs 快照[$keyA] 缺少图片基准，changed=false")
+            return false
         }
+        val region = snapRegions[keyA]
+        // 幂等开流：已在流式则 startFrameStream 直接返回，连续 IF 复用同一路流。
+        // 此处不 StopStream——由 runGraph 统一收尾，省掉每个节点的重复预热。
+        ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.StartStream)
+        return withTimeoutOrNull(timeoutMs) {
+            var lastId = -1L
+            ServiceBus.streamFrame.first { frame ->
+                if (frame == null || frame.id == lastId) return@first false
+                lastId = frame.id
+                attempt += 1
+                val now = cropBitmap(frame.bitmap, region)
+                val match = if (now != null) RegionDiff.compare(baseline, now) else null
+                now?.recycle()
+                val changed = match != null && match.score < threshold
+                App.from(this@ClickerAccessibilityService).appendLog(
+                    "IF OpenCV vs 快照[$keyA](stream) attempt=$attempt " +
+                        "sim=${"%.3f".format(match?.score ?: -1.0)} " +
+                        "shift=(${match?.offsetX ?: 0},${match?.offsetY ?: 0}) " +
+                        "thr=$threshold changed=$changed"
+                )
+                changed
+            }
+            true
+        } ?: false
     }
 
     private fun saveDebugBitmap(name: String, bmp: android.graphics.Bitmap) {
@@ -358,17 +376,6 @@ class ClickerAccessibilityService : AccessibilityService() {
             ServiceBus.lastBitmap.first { it != null }
         } ?: return null
         return cropBitmap(bmp, region)
-    }
-
-    private suspend fun streamRegionCrop(
-        region: android.graphics.Rect?,
-        previousFrameId: Long,
-    ): Pair<Long, android.graphics.Bitmap>? {
-        val frame = withTimeoutOrNull(1_000) {
-            ServiceBus.streamFrame.first { it != null && it.id != previousFrameId }
-        } ?: return null
-        val crop = cropBitmap(frame.bitmap, region) ?: return null
-        return frame.id to crop
     }
 
     private suspend fun cropBitmap(
