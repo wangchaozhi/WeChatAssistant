@@ -36,6 +36,7 @@ import com.wangchaozhi.wechatassistant.data.model.Action
 import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
+import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.ui.MainActivity
 import com.wangchaozhi.wechatassistant.util.WifiAdbManager
 import kotlinx.coroutines.flow.first
@@ -78,6 +79,9 @@ class OverlayService : LifecycleService() {
     private var collapsedHandle: View? = null
     private var collapsed = false
     private val adbReader by lazy { WifiAdbTouchReader(this) }
+    // 悬浮层录制：全屏透明捕获层及其窗口参数。
+    private var recordOverlay: RecordOverlayView? = null
+    private var recordOverlayParams: WindowManager.LayoutParams? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -102,6 +106,10 @@ class OverlayService : LifecycleService() {
             ServiceBus.overlayHidden.collect { hidden ->
                 panelView?.post {
                     panelView?.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
+                }
+                // 录制层也跟着隐藏：模板/快照/AI 截图时不能截到本层。
+                recordOverlay?.post {
+                    recordOverlay?.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
                 }
             }
         }
@@ -655,6 +663,42 @@ class OverlayService : LifecycleService() {
     private fun recordTimestamp(): Long = SystemClock.uptimeMillis()
 
     private fun toggleRecording(btn: Button) {
+        val overlayEngine =
+            App.from(this).settingsRepo.recordEngine != SettingsRepository.RECORD_ENGINE_WIFI_ADB
+        if (overlayEngine) toggleOverlayRecording(btn) else toggleAdbRecording(btn)
+    }
+
+    /** 悬浮层录制（默认）：全屏透明层捕获手势 +「边录边放」用无障碍投回真实 App。 */
+    private fun toggleOverlayRecording(btn: Button) {
+        if (!recording) {
+            if (!ServiceBus.accessibilityReady.value) {
+                Toast.makeText(this, "请先开启「无障碍」服务再录制", Toast.LENGTH_LONG).show()
+                return
+            }
+            recording = true
+            recordedTouches.clear()
+            recordedPastes.clear()
+            recordedEnters.clear()
+            recordedTemplates.clear()
+            recordedSnapshots.clear()
+            btn.text = "完成"
+            ServiceBus.recordingMode.value = true
+            ServiceBus.adbRecording.value = false
+            showRecordOverlay()
+            ServiceBus.overlayCmd.tryEmit(ServiceBus.OverlayCmd.StartRecording)
+        } else {
+            recording = false
+            btn.text = "录制"
+            ServiceBus.recordingMode.value = false
+            removeRecordOverlay()
+            ServiceBus.overlayCmd.tryEmit(ServiceBus.OverlayCmd.StopRecording)
+            persistRecording()
+        }
+        refreshStatus()
+    }
+
+    /** Wi-Fi ADB 录制（可选项）：getevent 被动读取 /dev/input。 */
+    private fun toggleAdbRecording(btn: Button) {
         if (!recording) {
             WifiAdbManager.refresh()
             if (!WifiAdbManager.state.value.connected) {
@@ -662,7 +706,7 @@ class OverlayService : LifecycleService() {
                 Toast.makeText(this, "正在自动连接 Wi-Fi ADB...", Toast.LENGTH_SHORT).show()
                 lifecycleScope.launch {
                     if (WifiAdbManager.reconnect().isSuccess) {
-                        toggleRecording(btn)
+                        toggleAdbRecording(btn)
                     } else {
                         Toast.makeText(
                             this@OverlayService,
@@ -703,6 +747,70 @@ class OverlayService : LifecycleService() {
             persistRecording()
         }
         refreshStatus()
+    }
+
+    /** 添加全屏透明录制层，并把控制面板重新抬到最上层，保证 完成/模板/快照 仍可点。 */
+    private fun showRecordOverlay() {
+        if (recordOverlay != null) return
+        val view = RecordOverlayView(this) { raw -> onOverlayGesture(raw) }
+        val params = WindowManager.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+        recordOverlayParams = params
+        wm.addView(view, params)
+        recordOverlay = view
+        // 把面板从窗口栈里摘下再加回去，使其浮在录制层之上。
+        panelView?.let { p ->
+            val pp = panelParams ?: return@let
+            runCatching { wm.removeView(p) }
+            runCatching { wm.addView(p, pp) }
+        }
+    }
+
+    private fun removeRecordOverlay() {
+        recordOverlay?.let { runCatching { wm.removeView(it) } }
+        recordOverlay = null
+        recordOverlayParams = null
+    }
+
+    /** 录制层捕获到一个完整手势：先记进脚本，再「边录边放」投给真实 App。 */
+    private fun onOverlayGesture(raw: ServiceBus.RawTouch) {
+        if (!recording || suppressTouchRecording) return
+        if (isOnPanel(raw.startX, raw.startY)) return
+        // 记录走既有管线（onCreate 里的 recordedTap 收集器）。
+        ServiceBus.recordedTap.tryEmit(raw)
+        lifecycleScope.launch {
+            // 注入期间放行：切非触摸，否则 dispatchGesture 会被本录制层再次截获。
+            setRecordOverlayTouchable(false)
+            try {
+                ServiceBus.recordInject.emit(raw)
+                kotlinx.coroutines.withTimeoutOrNull(
+                    raw.durationMs + INJECT_EXTRA_TIMEOUT_MS
+                ) { ServiceBus.recordInjectDone.first() }
+                // 留一点时间让 App 完成跳转/动画再恢复采集。
+                kotlinx.coroutines.delay(INJECT_SETTLE_MS)
+            } finally {
+                setRecordOverlayTouchable(true)
+            }
+        }
+    }
+
+    private fun setRecordOverlayTouchable(touchable: Boolean) {
+        val view = recordOverlay ?: return
+        val params = recordOverlayParams ?: return
+        params.flags = if (touchable) {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        } else {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        runCatching { wm.updateViewLayout(view, params) }
     }
 
     private fun refreshStatus() {
@@ -1114,6 +1222,7 @@ class OverlayService : LifecycleService() {
     override fun onDestroy() {
         super.onDestroy()
         adbReader.stop()
+        removeRecordOverlay()
         ServiceBus.overlayReady.value = false
         ServiceBus.recordingMode.value = false
         removeCropOverlay()
@@ -1135,6 +1244,10 @@ class OverlayService : LifecycleService() {
 
     companion object {
         private const val NOTIF_ID = 0x10A2
+        // 注入超时 = 手势时长 + 这点富余（等无障碍回 done）。
+        private const val INJECT_EXTRA_TIMEOUT_MS = 1_500L
+        // 注入后留给真实 App 完成跳转/动画的安定时间，再恢复采集。
+        private const val INJECT_SETTLE_MS = 120L
         fun start(ctx: Context) {
             ctx.startForegroundService(Intent(ctx, OverlayService::class.java))
         }

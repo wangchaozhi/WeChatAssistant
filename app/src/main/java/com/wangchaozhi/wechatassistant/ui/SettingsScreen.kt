@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -62,6 +63,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.wangchaozhi.wechatassistant.App
+import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
 import com.wangchaozhi.wechatassistant.service.CaptureForegroundService
 import com.wangchaozhi.wechatassistant.service.ServiceBus
@@ -82,6 +84,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var defaultProvider by remember { mutableStateOf(viewModel.defaultAiProvider) }
     var qwenCachedModels by remember { mutableStateOf(viewModel.cachedModels(AiProvider.DASHSCOPE)) }
     var modelScopeCachedModels by remember { mutableStateOf(viewModel.cachedModels(AiProvider.MODELSCOPE)) }
+    var recordEngine by remember { mutableStateOf(viewModel.recordEngine) }
 
     LaunchedEffect(Unit) {
         if (!viewModel.settingsModelsFetchedThisRun) {
@@ -152,7 +155,16 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onSide = { thumbSide = it; viewModel.thumbnailMaxSide = it },
                 )
             }
-            item { WifiAdbCard(viewModel) }
+            item {
+                RecordEngineCard(
+                    engine = recordEngine,
+                    onEngine = { recordEngine = it; viewModel.recordEngine = it },
+                )
+            }
+            // Wi-Fi ADB 配对卡片只在选了「Wi-Fi ADB 录制」时显示——悬浮层录制用不到它。
+            if (recordEngine == SettingsRepository.RECORD_ENGINE_WIFI_ADB) {
+                item { WifiAdbCard(viewModel) }
+            }
             item { DebugLogCard() }
         }
     }
@@ -308,6 +320,60 @@ private fun ModelScopeCard(
                 fallback = cachedModels.ifEmpty { AiProvider.MODELSCOPE_MODELS },
                 label = "默认模型",
             )
+        }
+    }
+}
+
+@Composable
+private fun RecordEngineCard(engine: String, onEngine: (String) -> Unit) {
+    val overlaySelected = engine != SettingsRepository.RECORD_ENGINE_WIFI_ADB
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SettingsIcon(Icons.Filled.TouchApp)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("录制方式", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (overlaySelected)
+                            "悬浮层录制：全屏接管触摸、边录边放，需开启无障碍"
+                        else
+                            "Wi-Fi ADB 录制：getevent 读取触摸，需配对 ADB",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (overlaySelected) {
+                    Button(
+                        onClick = { onEngine(SettingsRepository.RECORD_ENGINE_OVERLAY) },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("悬浮层录制") }
+                    OutlinedButton(
+                        onClick = { onEngine(SettingsRepository.RECORD_ENGINE_WIFI_ADB) },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Wi-Fi ADB") }
+                } else {
+                    OutlinedButton(
+                        onClick = { onEngine(SettingsRepository.RECORD_ENGINE_OVERLAY) },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("悬浮层录制") }
+                    Button(
+                        onClick = { onEngine(SettingsRepository.RECORD_ENGINE_WIFI_ADB) },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Wi-Fi ADB") }
+                }
+            }
         }
     }
 }

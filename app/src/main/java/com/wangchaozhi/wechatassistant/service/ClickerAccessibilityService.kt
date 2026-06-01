@@ -69,6 +69,34 @@ class ClickerAccessibilityService : AccessibilityService() {
                 ServiceBus.enterResult.emit(ok)
             }
         }
+        scope.launch {
+            // 「边录边放」：把悬浮层刚录到的手势立即投放给真实 App，让界面前进。
+            ServiceBus.recordInject.collect { raw ->
+                runCatching { performGesture(raw.toGestureAction()) }
+                ServiceBus.recordInjectDone.emit(Unit)
+            }
+        }
+    }
+
+    /** 由原始触摸推断手势类型，构造一个可被 [performGesture] 执行的临时 Action。 */
+    private fun ServiceBus.RawTouch.toGestureAction(): Action {
+        val dx = endX - startX
+        val dy = endY - startY
+        val type = when {
+            kotlin.math.hypot(dx, dy) > 20f -> ActionType.SWIPE
+            durationMs > 500 -> ActionType.LONG_PRESS
+            else -> ActionType.TAP
+        }
+        return Action(
+            scriptId = 0,
+            index = 0,
+            type = type,
+            startX = startX,
+            startY = startY,
+            endX = endX,
+            endY = endY,
+            durationMs = durationMs.coerceAtLeast(1L),
+        )
     }
 
     private fun pasteIntoFocused(): Boolean {

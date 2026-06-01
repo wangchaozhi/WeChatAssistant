@@ -101,6 +101,10 @@ class MainViewModel(
         get() = settings.aiImageMaxSide
         set(value) { settings.aiImageMaxSide = value }
 
+    var recordEngine: String
+        get() = settings.recordEngine
+        set(value) { settings.recordEngine = value }
+
     val wifiAdbState: StateFlow<WifiAdbManager.Status> = WifiAdbManager.state
 
     fun saveWifiAdbConfig(host: String, pairingPort: Int, connectPort: Int) {

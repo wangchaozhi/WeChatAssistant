@@ -58,8 +58,14 @@ object ServiceBus {
     val adbRecording = MutableStateFlow(false)
     val recordedTap = MutableSharedFlow<RawTouch>(extraBufferCapacity = 64)
 
+    // 「边录边放」：悬浮录制层把刚录到的手势丢给无障碍立刻投放给真实 App，让界面前进。
+    // recordInject 发手势，无障碍执行完回一个 recordInjectDone。
+    val recordInject = MutableSharedFlow<RawTouch>(extraBufferCapacity = 16)
+    val recordInjectDone = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
+
     enum class RawTouchSource {
         SHIZUKU,
+        OVERLAY,
     }
 
     data class RawTouch(
