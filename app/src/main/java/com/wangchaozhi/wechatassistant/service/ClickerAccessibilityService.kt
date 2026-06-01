@@ -613,6 +613,10 @@ class ClickerAccessibilityService : AccessibilityService() {
     }
 
     private fun enterIntoFocused(): Boolean {
+        // 1) 首选：无障碍输入法接口。执行输入框声明的回车动作（评论框多半是「发送」），
+        //    微信等剥掉节点信息的输入框也有效。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && imeEnter()) return true
+        // 2) 兜底：节点动作。
         val focus = findFocusedEditable() ?: return false
         // 多行输入框：回车 = 在光标处插入换行；单行：先尝试 IME 提交动作（发送/搜索/下一步）。
         if (focus.isMultiLine) {
@@ -623,6 +627,45 @@ class ClickerAccessibilityService : AccessibilityService() {
             if (focus.performAction(imeEnterId)) return true
         }
         return insertNewlineAtCursor(focus)
+    }
+
+    /**
+     * 通过无障碍输入法接口触发回车：优先执行输入框声明的 IME 动作（发送/搜索/前往/完成），
+     * 没有明确动作时退化为发送回车键事件。Android 14+。
+     */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private fun imeEnter(): Boolean {
+        val im = runCatching { inputMethod }.getOrNull() ?: return false
+        if (!im.currentInputStarted) {
+            App.from(this).appendLog("ENTER IME: 输入未开始")
+            return false
+        }
+        val ic = im.currentInputConnection ?: run {
+            App.from(this).appendLog("ENTER IME: 无 InputConnection")
+            return false
+        }
+        val ei = im.currentInputEditorInfo
+        val imeOptions = ei?.imeOptions ?: 0
+        val action = imeOptions and android.view.inputmethod.EditorInfo.IME_MASK_ACTION
+        // 模仿真实键盘：多行框、或带 NO_ENTER_ACTION 标志时，回车=插入换行；否则才执行 IME 动作。
+        val multiline = ((ei?.inputType ?: 0) and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0
+        val noEnterAction =
+            (imeOptions and android.view.inputmethod.EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0
+        val hasAction = action != android.view.inputmethod.EditorInfo.IME_ACTION_NONE &&
+            action != android.view.inputmethod.EditorInfo.IME_ACTION_UNSPECIFIED
+        return try {
+            if (hasAction && !multiline && !noEnterAction) {
+                ic.performEditorAction(action)
+                App.from(this).appendLog("ENTER via IME performEditorAction action=$action")
+            } else {
+                ic.commitText("\n", 1, null)
+                App.from(this).appendLog("ENTER via IME 换行 (multiline=$multiline action=$action)")
+            }
+            true
+        } catch (t: Throwable) {
+            App.from(this).appendLog("ENTER IME 异常: ${t.message}")
+            false
+        }
     }
 
     /** 在当前光标/选区处插入换行，并把光标移到换行之后；无法读到选区时退化为末尾追加。 */
