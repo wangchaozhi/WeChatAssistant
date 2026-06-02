@@ -181,7 +181,7 @@ class OverlayService : LifecycleService() {
     private fun glassButtonBg(): RippleDrawable {
         val content = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = dp(18).toFloat()
+            cornerRadius = dp(14).toFloat()
             colors = intArrayOf(
                 Color.argb(80, 255, 255, 255),
                 Color.argb(40, 255, 255, 255),
@@ -198,7 +198,7 @@ class OverlayService : LifecycleService() {
 
     private fun panelGlassBg(): GradientDrawable = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
-        cornerRadius = dp(18).toFloat()
+        cornerRadius = dp(14).toFloat()
         setColor(Color.argb(160, 18, 18, 22))
         setStroke(dp(1), Color.argb(70, 255, 255, 255))
     }
@@ -220,14 +220,14 @@ class OverlayService : LifecycleService() {
     private fun compactBtn(ctx: Context, label: String, onClick: () -> Unit): Button =
         Button(ctx).apply {
             text = label
-            textSize = 14f
+            textSize = 12f
             isAllCaps = false
             minWidth = 0
             minHeight = 0
             minimumWidth = 0
             minimumHeight = 0
             includeFontPadding = false
-            setPadding(dp(14), dp(8), dp(14), dp(8))
+            setPadding(dp(9), dp(5), dp(9), dp(5))
             stateListAnimator = null
             background = glassButtonBg()
             setTextColor(Color.WHITE)
@@ -240,10 +240,10 @@ class OverlayService : LifecycleService() {
         val container = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = panelGlassBg()
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setPadding(dp(8), dp(6), dp(8), dp(6))
         }
         val rowSpacer = GradientDrawable().apply {
-            setSize(dp(4), 1)
+            setSize(dp(3), 1)
             setColor(Color.TRANSPARENT)
         }
         val topRow = LinearLayout(ctx).apply {
@@ -255,14 +255,14 @@ class OverlayService : LifecycleService() {
         val label = TextView(ctx).apply {
             text = "连点"
             setTextColor(Color.WHITE)
-            textSize = 14f
+            textSize = 12f
             gravity = Gravity.CENTER_VERTICAL
             isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
         val scriptNameLabel = TextView(ctx).apply {
             setTextColor(Color.WHITE)
-            textSize = 14f
+            textSize = 12f
             gravity = Gravity.CENTER_VERTICAL
             isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
@@ -274,8 +274,8 @@ class OverlayService : LifecycleService() {
         val statusBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            minimumWidth = dp(84)
-            setPadding(0, 0, dp(8), 0)
+            minimumWidth = dp(46)
+            setPadding(0, 0, dp(6), 0)
             addView(label, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -296,29 +296,29 @@ class OverlayService : LifecycleService() {
         val systemRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
-            setPadding(0, dp(6), 0, 0)
+            setPadding(0, dp(4), 0, 0)
             showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
             dividerDrawable = rowSpacer
         }
         val nodesRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(6), 0, 0)
+            setPadding(0, dp(4), 0, 0)
             showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
             dividerDrawable = rowSpacer
         }
         val nodesLabel = TextView(ctx).apply {
             text = "节点"
             setTextColor(Color.WHITE)
-            textSize = 14f
-            minWidth = dp(84)
+            textSize = 12f
+            minWidth = dp(46)
             gravity = Gravity.CENTER_VERTICAL
             isSingleLine = true
-            setPadding(0, 0, dp(8), 0)
+            setPadding(0, 0, dp(6), 0)
         }
         extraActionsRow = nodesRow
         // 「选」：只负责挑选脚本，不播放。选中后由「▶」播放。
-        val btnSelect = compactBtn(ctx, "选") {
+        val btnSelect = compactBtn(ctx, "☰") {
             lifecycleScope.launch {
                 selectBtn?.let { showScriptPicker(it) }
             }
@@ -376,7 +376,7 @@ class OverlayService : LifecycleService() {
             captureSnapshotForRecording()
         }
         topRow.addView(statusBox, LinearLayout.LayoutParams(
-            dp(120),
+            dp(92),
             ViewGroup.LayoutParams.WRAP_CONTENT,
         ))
         topRow.addView(btnRec)
@@ -389,18 +389,18 @@ class OverlayService : LifecycleService() {
         val templateRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(6), 0, 0)
+            setPadding(0, dp(4), 0, 0)
             showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
             dividerDrawable = rowSpacer
         }
         val templateLabel = TextView(ctx).apply {
             text = "找图"
             setTextColor(Color.WHITE)
-            textSize = 14f
-            minWidth = dp(84)
+            textSize = 12f
+            minWidth = dp(46)
             gravity = Gravity.CENTER_VERTICAL
             isSingleLine = true
-            setPadding(0, 0, dp(8), 0)
+            setPadding(0, 0, dp(6), 0)
         }
         templateRow.addView(templateLabel)
         templateRow.addView(btnTemplate)
@@ -528,8 +528,8 @@ class OverlayService : LifecycleService() {
         attachCollapsedDrag(handle) { expandPanel() }
         attachCollapsedDrag(bar) { expandPanel() }
         bar.addView(play)
-        bar.addView(select)
         bar.addView(edit)
+        bar.addView(select)
         bar.addView(handle)
         return bar
     }
