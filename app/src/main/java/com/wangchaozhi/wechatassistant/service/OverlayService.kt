@@ -259,6 +259,13 @@ class OverlayService : LifecycleService() {
         val btnHome = compactBtn(ctx, "↗") { launchHome(null) }
         val btnClose = compactBtn(ctx, "×") { stopSelf() }
         val btnCollapse = compactBtn(ctx, "⋮") { collapsePanel() }
+        val systemRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, 0)
+            showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
+            dividerDrawable = rowSpacer
+        }
         val nodesRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -338,9 +345,6 @@ class OverlayService : LifecycleService() {
         topRow.addView(btnRec)
         topRow.addView(btnSelect)
         topRow.addView(btnPlayStop)
-        topRow.addView(btnHome)
-        topRow.addView(btnClose)
-        topRow.addView(btnCollapse)
         nodesRow.addView(nodesLabel)
         nodesRow.addView(btnAi)
         nodesRow.addView(btnPaste)
@@ -364,11 +368,15 @@ class OverlayService : LifecycleService() {
         templateRow.addView(templateLabel)
         templateRow.addView(btnTemplate)
         templateRow.addView(btnSnapshot)
+        systemRow.addView(btnHome)
+        systemRow.addView(btnClose)
+        systemRow.addView(btnCollapse)
         val content = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             addView(topRow)
             addView(nodesRow)
             addView(templateRow)
+            addView(systemRow)
         }
         panelContent = content
         // 收起后的竖排小工具条：手柄(拖动/展开) + 播放 + 选脚本 + 编辑所选脚本
@@ -412,13 +420,13 @@ class OverlayService : LifecycleService() {
         }
     }
 
-    /** 把手：拖动移动整个窗口，未超过触摸阈值则视为轻点 → 展开。 */
-    private fun attachHandleDrag(handle: View) {
+    /** 折叠态按钮：拖动移动整个窗口，未超过触摸阈值则执行原点击动作。 */
+    private fun attachCollapsedDrag(view: View, clickAction: () -> Unit) {
         val slop = dp(6)
         var startX = 0; var startY = 0
         var downRawX = 0f; var downRawY = 0f
         var moved = false
-        handle.setOnTouchListener { _, e ->
+        view.setOnTouchListener { _, e ->
             val p = panelParams ?: return@setOnTouchListener false
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -435,7 +443,7 @@ class OverlayService : LifecycleService() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!moved) expandPanel()
+                    if (!moved) clickAction()
                     true
                 }
                 else -> false
@@ -473,12 +481,15 @@ class OverlayService : LifecycleService() {
         }
         // 选脚本：先声明，供播放/编辑的「未选」兜底当作选择器锚点。
         val select = compactBtn(ctx, "选") { }
-        select.setOnClickListener { lifecycleScope.launch { showScriptPicker(select) } }
-        val play = compactBtn(ctx, "▶") { togglePlayStop(select) }
+        attachCollapsedDrag(select) { lifecycleScope.launch { showScriptPicker(select) } }
+        val play = compactBtn(ctx, "▶") { }
         collapsedPlayBtn = play
-        val edit = compactBtn(ctx, "✎") { editSelectedScript(select) }
+        attachCollapsedDrag(play) { togglePlayStop(select) }
+        val edit = compactBtn(ctx, "✎") { }
+        attachCollapsedDrag(edit) { editSelectedScript(select) }
         val handle = compactBtn(ctx, "‹") { }
-        attachHandleDrag(handle)
+        attachCollapsedDrag(handle) { expandPanel() }
+        attachCollapsedDrag(bar) { expandPanel() }
         bar.addView(handle)
         bar.addView(play)
         bar.addView(select)
