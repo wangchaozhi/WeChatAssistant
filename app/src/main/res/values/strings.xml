@@ -5,9 +5,12 @@
 
     <string name="channel_capture_name">屏幕截图</string>
     <string name="channel_overlay_name">悬浮控制面板</string>
+    <string name="channel_adb_name">Wi-Fi ADB 配对</string>
 
     <string name="notif_capture_title">屏幕截图已就绪</string>
     <string name="notif_capture_text">截图服务正在运行，可被脚本调用。</string>
     <string name="notif_overlay_title">悬浮面板运行中</string>
     <string name="notif_overlay_text">点击通知返回主界面。</string>
+    <string name="notif_adb_title">Wi-Fi ADB 配对助手</string>
+    <string name="notif_adb_text">在系统无线调试弹窗打开时回复配对码</string>
 </resources>

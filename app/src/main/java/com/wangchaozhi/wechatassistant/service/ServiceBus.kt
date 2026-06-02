@@ -22,11 +22,15 @@ object ServiceBus {
     sealed interface CaptureCmd {
         data class TakeAndAsk(val prompt: String) : CaptureCmd
         data object JustCapture : CaptureCmd
+        data object StartStream : CaptureCmd
+        data object StopStream : CaptureCmd
     }
 
     val captureCmd = MutableSharedFlow<CaptureCmd>(extraBufferCapacity = 4)
 
     val lastBitmap = MutableStateFlow<Bitmap?>(null)
+    data class CaptureFrame(val id: Long, val bitmap: Bitmap)
+    val streamFrame = MutableStateFlow<CaptureFrame?>(null)
     val lastAiAnswer = MutableStateFlow<String?>(null)
 
     sealed interface AiResult {
@@ -51,11 +55,17 @@ object ServiceBus {
     val enterResult = MutableSharedFlow<Boolean>(extraBufferCapacity = 4)
 
     val recordingMode = MutableStateFlow(false)
-    val shizukuRecording = MutableStateFlow(false)
+    val adbRecording = MutableStateFlow(false)
     val recordedTap = MutableSharedFlow<RawTouch>(extraBufferCapacity = 64)
+
+    // 「边录边放」：悬浮录制层把刚录到的手势丢给无障碍立刻投放给真实 App，让界面前进。
+    // recordInject 发手势，无障碍执行完回一个 recordInjectDone。
+    val recordInject = MutableSharedFlow<RawTouch>(extraBufferCapacity = 16)
+    val recordInjectDone = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
 
     enum class RawTouchSource {
         SHIZUKU,
+        OVERLAY,
     }
 
     data class RawTouch(

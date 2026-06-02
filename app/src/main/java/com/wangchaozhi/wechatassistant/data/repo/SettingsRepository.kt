@@ -56,6 +56,41 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt(KEY_AI_SIDE, DEFAULT_AI_SIDE)
         set(value) = prefs.edit().putInt(KEY_AI_SIDE, value).apply()
 
+    fun cachedModels(providerName: String): List<String> =
+        prefs.getString("$KEY_MODEL_CACHE_PREFIX$providerName", "")
+            .orEmpty()
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+
+    fun setCachedModels(providerName: String, models: List<String>) {
+        prefs.edit()
+            .putString(
+                "$KEY_MODEL_CACHE_PREFIX$providerName",
+                models.map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString("\n"),
+            )
+            .apply()
+    }
+
+    var adbHost: String
+        get() = prefs.getString(KEY_ADB_HOST, DEFAULT_ADB_HOST).orEmpty()
+        set(value) = prefs.edit().putString(KEY_ADB_HOST, value).apply()
+
+    var adbPairingPort: Int
+        get() = prefs.getInt(KEY_ADB_PAIR_PORT, 0)
+        set(value) = prefs.edit().putInt(KEY_ADB_PAIR_PORT, value).apply()
+
+    var adbConnectPort: Int
+        get() = prefs.getInt(KEY_ADB_CONNECT_PORT, 0)
+        set(value) = prefs.edit().putInt(KEY_ADB_CONNECT_PORT, value).apply()
+
+    // 录制方式：RECORD_ENGINE_OVERLAY（默认，悬浮层 + 边录边放）/ RECORD_ENGINE_WIFI_ADB（getevent）。
+    var recordEngine: String
+        get() = prefs.getString(KEY_RECORD_ENGINE, RECORD_ENGINE_OVERLAY).orEmpty()
+        set(value) = prefs.edit().putString(KEY_RECORD_ENGINE, value).apply()
+
     companion object {
         private const val KEY_QWEN_API = "qwen_api_key"
         private const val KEY_DEFAULT_PROMPT = "default_prompt"
@@ -65,11 +100,19 @@ class SettingsRepository(context: Context) {
         private const val KEY_DEFAULT_PROVIDER = "default_ai_provider"
         private const val KEY_THUMB_SIDE = "thumb_max_side"
         private const val KEY_AI_SIDE = "ai_image_max_side"
+        private const val KEY_MODEL_CACHE_PREFIX = "model_cache_"
+        private const val KEY_ADB_HOST = "adb_host"
+        private const val KEY_ADB_PAIR_PORT = "adb_pair_port"
+        private const val KEY_ADB_CONNECT_PORT = "adb_connect_port"
+        private const val KEY_RECORD_ENGINE = "record_engine"
+        const val RECORD_ENGINE_OVERLAY = "OVERLAY"
+        const val RECORD_ENGINE_WIFI_ADB = "WIFI_ADB"
         const val DEFAULT_MODEL = "qwen3.5-omni-flash"
         const val DEFAULT_MS_MODEL = "Qwen/Qwen3.5-122B-A10B"
         const val DEFAULT_PROVIDER = "DASHSCOPE"
         const val DEFAULT_PROMPT = "请识别截图中的内容并简要回答。"
         const val DEFAULT_THUMB_SIDE = 480
         const val DEFAULT_AI_SIDE = 1280
+        const val DEFAULT_ADB_HOST = "127.0.0.1"
     }
 }

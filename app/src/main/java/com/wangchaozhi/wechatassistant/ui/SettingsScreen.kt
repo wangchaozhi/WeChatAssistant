@@ -1,5 +1,10 @@
 package com.wangchaozhi.wechatassistant.ui
 
+import android.content.Intent
+import android.graphics.BitmapFactory
+import android.provider.Settings
+import android.widget.Toast
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,6 +20,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cloud
@@ -22,6 +30,7 @@ import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -49,9 +58,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.wangchaozhi.wechatassistant.App
+import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
+import com.wangchaozhi.wechatassistant.service.CaptureForegroundService
+import com.wangchaozhi.wechatassistant.service.ServiceBus
+import com.wangchaozhi.wechatassistant.util.copyToClipboard
+import com.wangchaozhi.wechatassistant.util.WifiAdbNotification
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,6 +82,17 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var msKey by remember { mutableStateOf(viewModel.modelScopeApiKey) }
     var msModel by remember { mutableStateOf(viewModel.modelScopeModel) }
     var defaultProvider by remember { mutableStateOf(viewModel.defaultAiProvider) }
+    var qwenCachedModels by remember { mutableStateOf(viewModel.cachedModels(AiProvider.DASHSCOPE)) }
+    var modelScopeCachedModels by remember { mutableStateOf(viewModel.cachedModels(AiProvider.MODELSCOPE)) }
+    var recordEngine by remember { mutableStateOf(viewModel.recordEngine) }
+
+    LaunchedEffect(Unit) {
+        if (!viewModel.settingsModelsFetchedThisRun) {
+            viewModel.fetchModels(AiProvider.DASHSCOPE).onSuccess { qwenCachedModels = it }
+            viewModel.fetchModels(AiProvider.MODELSCOPE).onSuccess { modelScopeCachedModels = it }
+            viewModel.settingsModelsFetchedThisRun = true
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -90,16 +119,17 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 DefaultProviderCard(
                     provider = defaultProvider,
                     onProvider = { defaultProvider = it; viewModel.defaultAiProvider = it },
+                    prompt = prompt,
+                    onPrompt = { prompt = it; viewModel.defaultPrompt = it },
                 )
             }
             item {
                 QwenCard(
                     apiKey = apiKey,
                     onApiKey = { apiKey = it; viewModel.apiKey = it },
-                    prompt = prompt,
-                    onPrompt = { prompt = it; viewModel.defaultPrompt = it },
                     model = model,
                     onModel = { model = it; viewModel.qwenModel = it },
+                    cachedModels = qwenCachedModels,
                     fetchModels = { viewModel.fetchModels(AiProvider.DASHSCOPE) },
                 )
             }
@@ -109,6 +139,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onApiKey = { msKey = it; viewModel.modelScopeApiKey = it },
                     model = msModel,
                     onModel = { msModel = it; viewModel.modelScopeModel = it },
+                    cachedModels = modelScopeCachedModels,
                     fetchModels = { viewModel.fetchModels(AiProvider.MODELSCOPE) },
                 )
             }
@@ -124,7 +155,17 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onSide = { thumbSide = it; viewModel.thumbnailMaxSide = it },
                 )
             }
-            item { ShizukuCard(viewModel) }
+            item {
+                RecordEngineCard(
+                    engine = recordEngine,
+                    onEngine = { recordEngine = it; viewModel.recordEngine = it },
+                )
+            }
+            // Wi-Fi ADB 配对卡片只在选了「Wi-Fi ADB 录制」时显示——悬浮层录制用不到它。
+            if (recordEngine == SettingsRepository.RECORD_ENGINE_WIFI_ADB) {
+                item { WifiAdbCard(viewModel) }
+            }
+            item { DebugLogCard() }
         }
     }
 }
@@ -133,10 +174,9 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
 private fun QwenCard(
     apiKey: String,
     onApiKey: (String) -> Unit,
-    prompt: String,
-    onPrompt: (String) -> Unit,
     model: String,
     onModel: (String) -> Unit,
+    cachedModels: List<String>,
     fetchModels: suspend () -> Result<List<String>>,
 ) {
     Card(
@@ -169,21 +209,20 @@ private fun QwenCard(
                 model = model,
                 onModel = onModel,
                 fetch = fetchModels,
-                fallback = AiProvider.DASHSCOPE_MODELS,
+                fallback = cachedModels.ifEmpty { AiProvider.DASHSCOPE_MODELS },
                 label = "多模态模型",
-            )
-            OutlinedTextField(
-                value = prompt,
-                onValueChange = onPrompt,
-                label = { Text("默认 Prompt") },
-                modifier = Modifier.fillMaxWidth(),
             )
         }
     }
 }
 
 @Composable
-private fun DefaultProviderCard(provider: String, onProvider: (String) -> Unit) {
+private fun DefaultProviderCard(
+    provider: String,
+    onProvider: (String) -> Unit,
+    prompt: String,
+    onPrompt: (String) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     val current = AiProvider.parse(provider) ?: AiProvider.DASHSCOPE
     Card(
@@ -229,6 +268,12 @@ private fun DefaultProviderCard(provider: String, onProvider: (String) -> Unit) 
                     }
                 }
             }
+            OutlinedTextField(
+                value = prompt,
+                onValueChange = onPrompt,
+                label = { Text("默认 Prompt") },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -239,6 +284,7 @@ private fun ModelScopeCard(
     onApiKey: (String) -> Unit,
     model: String,
     onModel: (String) -> Unit,
+    cachedModels: List<String>,
     fetchModels: suspend () -> Result<List<String>>,
 ) {
     Card(
@@ -271,9 +317,63 @@ private fun ModelScopeCard(
                 model = model,
                 onModel = onModel,
                 fetch = fetchModels,
-                fallback = AiProvider.MODELSCOPE_MODELS,
+                fallback = cachedModels.ifEmpty { AiProvider.MODELSCOPE_MODELS },
                 label = "默认模型",
             )
+        }
+    }
+}
+
+@Composable
+private fun RecordEngineCard(engine: String, onEngine: (String) -> Unit) {
+    val overlaySelected = engine != SettingsRepository.RECORD_ENGINE_WIFI_ADB
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SettingsIcon(Icons.Filled.TouchApp)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("录制方式", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (overlaySelected)
+                            "悬浮层录制：全屏接管触摸、边录边放，需开启无障碍"
+                        else
+                            "Wi-Fi ADB 录制：getevent 读取触摸，需配对 ADB",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (overlaySelected) {
+                    Button(
+                        onClick = { onEngine(SettingsRepository.RECORD_ENGINE_OVERLAY) },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("悬浮层录制") }
+                    OutlinedButton(
+                        onClick = { onEngine(SettingsRepository.RECORD_ENGINE_WIFI_ADB) },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Wi-Fi ADB") }
+                } else {
+                    OutlinedButton(
+                        onClick = { onEngine(SettingsRepository.RECORD_ENGINE_OVERLAY) },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("悬浮层录制") }
+                    Button(
+                        onClick = { onEngine(SettingsRepository.RECORD_ENGINE_WIFI_ADB) },
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Wi-Fi ADB") }
+                }
+            }
         }
     }
 }
@@ -404,16 +504,17 @@ private val AI_IMAGE_PRESETS = listOf(
 )
 
 @Composable
-fun ShizukuCard(viewModel: MainViewModel) {
-    val state by viewModel.shizukuState.collectAsState()
+fun WifiAdbCard(viewModel: MainViewModel) {
+    val context = LocalContext.current
+    val state by viewModel.wifiAdbState.collectAsState()
     var showHelp by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { viewModel.refreshShizuku() }
+    LaunchedEffect(Unit) { viewModel.refreshWifiAdb() }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (state.granted) {
+            containerColor = if (state.connected) {
                 MaterialTheme.colorScheme.primaryContainer
             } else {
                 MaterialTheme.colorScheme.surface
@@ -422,16 +523,17 @@ fun ShizukuCard(viewModel: MainViewModel) {
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             val statusText = when {
-                !state.available -> "未启动（请先在 Shizuku App 中通过无线调试启动）"
-                !state.granted -> "已就绪，但未授权本应用"
-                else -> "已连接 · 已授权"
+                state.busy -> state.message.ifBlank { "处理中..." }
+                state.connected -> "已连接 ${state.host}:${state.connectPort}"
+                state.message.isNotBlank() -> state.message
+                else -> "未连接（使用系统无线调试配对/连接）"
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                SettingsIcon(if (state.granted) Icons.Filled.Security else Icons.Filled.Link)
+                SettingsIcon(if (state.connected) Icons.Filled.Security else Icons.Filled.Link)
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
-                        "Shizuku 高级录制",
+                        "Wi-Fi ADB 高级录制",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -439,23 +541,44 @@ fun ShizukuCard(viewModel: MainViewModel) {
                 }
             }
             Text(
-                "录制功能仅使用 Shizuku 高级录制，可记录图标点击、游戏画布、自定义控件、长按与滑动。",
+                "录制功能通过无线调试 ADB 执行 getevent，可记录图标点击、游戏画布、自定义控件、长按与滑动。",
                 style = MaterialTheme.typography.bodyMedium,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (state.available && !state.granted) {
-                    Button(onClick = viewModel::requestShizukuPermission, shape = RoundedCornerShape(8.dp)) {
-                        Icon(Icons.Filled.Security, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("授权")
-                    }
+                Button(
+                    onClick = {
+                        // 截屏前台服务会占用通知，先停掉再弹通知，避免被覆盖
+                        if (ServiceBus.captureReady.value) {
+                            CaptureForegroundService.stop(context)
+                        }
+                        WifiAdbNotification.show(context)
+                        // 顺手打开开发者选项，方便用户进入「无线调试」拿配对码
+                        runCatching {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }
+                    },
+                    enabled = !state.busy && !state.connected,
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Icon(Icons.Filled.Security, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (state.connected) "已连接" else "通知配对")
                 }
-                OutlinedButton(onClick = viewModel::refreshShizuku, shape = RoundedCornerShape(8.dp)) {
+                OutlinedButton(
+                    onClick = viewModel::reconnectWifiAdb,
+                    enabled = !state.busy,
+                    shape = RoundedCornerShape(8.dp),
+                ) {
                     Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("刷新")
+                    Text(if (state.connected) "刷新" else "重连")
                 }
-                TextButton(onClick = { showHelp = true }) { Text("无线调试启动") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { showHelp = true }) { Text("说明") }
             }
         }
     }
@@ -464,17 +587,16 @@ fun ShizukuCard(viewModel: MainViewModel) {
         AlertDialog(
             shape = RoundedCornerShape(8.dp),
             onDismissRequest = { showHelp = false },
-            title = { Text("用无线调试启动 Shizuku（无需电脑）") },
+            title = { Text("连接 Wi-Fi ADB") },
             text = {
                 Column {
                     Text(
-                        "前置：Android 11+；先在应用商店或 GitHub 装好「Shizuku」App。\n\n" +
+                        "前置：Android 11+，并打开开发者选项里的「无线调试」。\n\n" +
                         "1. 系统设置 → 关于手机 → 连点 7 次「版本号」打开开发者模式\n" +
-                        "2. 开发者选项 → 打开「无线调试」并保持页面停留\n" +
-                        "3. 进入 Shizuku App → 选「通过无线调试启动」\n" +
-                        "4. 按 Shizuku 提示操作（部分机型需用「使用配对码配对设备」的端口和配对码）\n" +
-                        "5. 启动成功后回到本应用，点上方「刷新状态」→「授权本应用」\n\n" +
-                        "重启手机后 Shizuku 会失效，按上述步骤再启动一次即可。",
+                        "2. 点「通知配对」：会发出一条通知并自动跳到开发者选项\n" +
+                        "3. 开发者选项 → 打开「无线调试」→「使用配对码配对设备」\n" +
+                        "4. 保持配对弹窗打开，下拉通知点「输入配对码」回复 6 位配对码，端口会自动查找并连接\n\n" +
+                        "一般不需要手动填写端口；如果自动连接失败，再检查无线调试是否保持开启。",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -483,6 +605,195 @@ fun ShizukuCard(viewModel: MainViewModel) {
         )
     }
 }
+
+@Composable
+private fun DebugLogCard() {
+    val context = LocalContext.current
+    val app = remember(context) { App.from(context) }
+    var showLog by remember { mutableStateOf(false) }
+    var showImages by remember { mutableStateOf(false) }
+    var logText by remember { mutableStateOf("") }
+    var logSize by remember { mutableStateOf(app.logFileSizeBytes()) }
+    var debugImages by remember { mutableStateOf(app.debugBitmapFiles()) }
+
+    fun refreshLog() {
+        logText = app.readLog()
+        logSize = app.logFileSizeBytes()
+        debugImages = app.debugBitmapFiles()
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SettingsIcon(Icons.Filled.Refresh)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("调试日志", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "记录截图、AI、快照对比与脚本运行信息 · ${formatBytes(logSize)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        refreshLog()
+                        showLog = true
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                ) { Text("查看日志") }
+                OutlinedButton(
+                    onClick = {
+                        context.copyToClipboard(app.readLog(Int.MAX_VALUE), label = "WCA Debug Log")
+                        Toast.makeText(context, "日志已复制", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                ) { Text("复制") }
+                OutlinedButton(
+                    onClick = {
+                        debugImages = app.debugBitmapFiles()
+                        showImages = true
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                ) { Text("查看图片") }
+                TextButton(
+                    onClick = {
+                        app.clearLog()
+                        refreshLog()
+                        Toast.makeText(context, "日志已清空", Toast.LENGTH_SHORT).show()
+                    },
+                ) { Text("清空") }
+            }
+        }
+    }
+
+    if (showLog) {
+        AlertDialog(
+            shape = RoundedCornerShape(8.dp),
+            onDismissRequest = { showLog = false },
+            title = { Text("调试日志") },
+            text = {
+                val scroll = rememberScrollState()
+                SelectionContainer {
+                    Text(
+                        text = logText.ifBlank { "暂无日志" },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(420.dp)
+                            .verticalScroll(scroll),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showLog = false }) { Text("关闭") }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        context.copyToClipboard(app.readLog(Int.MAX_VALUE), label = "WCA Debug Log")
+                        Toast.makeText(context, "日志已复制", Toast.LENGTH_SHORT).show()
+                    }) { Text("复制") }
+                    TextButton(onClick = {
+                        app.clearLog()
+                        refreshLog()
+                        Toast.makeText(context, "日志已清空", Toast.LENGTH_SHORT).show()
+                    }) { Text("清空") }
+                }
+            },
+        )
+    }
+
+    if (showImages) {
+        DebugImagesDialog(
+            images = debugImages,
+            onRefresh = { debugImages = app.debugBitmapFiles() },
+            onDismiss = { showImages = false },
+        )
+    }
+}
+
+@Composable
+private fun DebugImagesDialog(
+    images: List<File>,
+    onRefresh: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        shape = RoundedCornerShape(8.dp),
+        onDismissRequest = onDismiss,
+        title = { Text("调试图片") },
+        text = {
+            val scroll = rememberScrollState()
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .height(520.dp)
+                    .verticalScroll(scroll),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (images.isEmpty()) {
+                    Text(
+                        "暂无调试图片。运行脚本后会生成 dbg_snap_* 和 dbg_now_*。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    images.forEach { file ->
+                        DebugImageItem(file)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) { Text("关闭") }
+        },
+        dismissButton = {
+            TextButton(onClick = onRefresh) { Text("刷新") }
+        },
+    )
+}
+
+@Composable
+private fun DebugImageItem(file: File) {
+    val bitmap = remember(file.absolutePath, file.lastModified()) {
+        BitmapFactory.decodeFile(file.absolutePath)
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "${file.name} · ${formatBytes(file.length())}",
+            style = MaterialTheme.typography.labelMedium,
+        )
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = file.name,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp)),
+            )
+        } else {
+            Text(
+                "图片无法解码",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+private fun formatBytes(bytes: Long): String =
+    when {
+        bytes < 1024 -> "${bytes}B"
+        bytes < 1024 * 1024 -> "${bytes / 1024}KB"
+        else -> "%.1fMB".format(bytes / 1024f / 1024f)
+    }
 
 @Composable
 private fun SettingsIcon(icon: androidx.compose.ui.graphics.vector.ImageVector) {

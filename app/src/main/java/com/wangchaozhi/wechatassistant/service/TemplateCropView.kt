@@ -99,4 +99,7 @@ class TemplateCropView(context: Context, private val bitmap: Bitmap) : View(cont
 
     /** 按当前裁剪框裁出模板；过小返回 null。 */
     fun crop(): Bitmap? = crop.crop(bitmap)
+
+    /** 当前裁剪框，坐标单位是原截图像素。 */
+    fun cropRect(): CropRect = crop
 }
