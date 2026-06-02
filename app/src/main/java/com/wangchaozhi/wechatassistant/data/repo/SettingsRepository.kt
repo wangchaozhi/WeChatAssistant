@@ -86,6 +86,11 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt(KEY_ADB_CONNECT_PORT, 0)
         set(value) = prefs.edit().putInt(KEY_ADB_CONNECT_PORT, value).apply()
 
+    // 悬浮窗上次勾选的脚本 id（-1 表示未选）。重启/重建悬浮窗后据此恢复所选。
+    var selectedScriptId: Long
+        get() = prefs.getLong(KEY_SELECTED_SCRIPT, -1L)
+        set(value) = prefs.edit().putLong(KEY_SELECTED_SCRIPT, value).apply()
+
     companion object {
         private const val KEY_QWEN_API = "qwen_api_key"
         private const val KEY_DEFAULT_PROMPT = "default_prompt"
@@ -99,6 +104,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_ADB_HOST = "adb_host"
         private const val KEY_ADB_PAIR_PORT = "adb_pair_port"
         private const val KEY_ADB_CONNECT_PORT = "adb_connect_port"
+        private const val KEY_SELECTED_SCRIPT = "overlay_selected_script_id"
         const val DEFAULT_MODEL = "qwen3.5-omni-flash"
         const val DEFAULT_MS_MODEL = "Qwen/Qwen3.5-122B-A10B"
         const val DEFAULT_PROVIDER = "DASHSCOPE"
