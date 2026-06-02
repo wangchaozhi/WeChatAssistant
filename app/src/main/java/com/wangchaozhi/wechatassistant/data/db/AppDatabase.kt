@@ -19,7 +19,7 @@ class Converters {
 
 @Database(
     entities = [Script::class, Action::class, AiAnswer::class, Edge::class],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -48,6 +48,13 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE ai_answers ADD COLUMN aiProvider TEXT")
                 db.execSQL("ALTER TABLE ai_answers ADD COLUMN aiModel TEXT")
+            }
+        }
+
+        // WAIT 节点新增随机抖动列，保留已有脚本数据。
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE actions ADD COLUMN randomExtraMs INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

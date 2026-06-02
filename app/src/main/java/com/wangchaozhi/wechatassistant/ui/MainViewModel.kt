@@ -15,7 +15,7 @@ import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
 import com.wangchaozhi.wechatassistant.feature.ai.VisionAiRepository
 import com.wangchaozhi.wechatassistant.service.ServiceBus
-import com.wangchaozhi.wechatassistant.util.ShizukuManager
+import com.wangchaozhi.wechatassistant.util.WifiAdbManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +39,8 @@ class MainViewModel(
     private val settings: SettingsRepository,
     private val visionAi: VisionAiRepository,
 ) : ViewModel() {
+
+    var settingsModelsFetchedThisRun: Boolean = false
 
     val scripts: StateFlow<List<Script>> = scriptRepo.observeScripts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -82,9 +84,14 @@ class MainViewModel(
         get() = settings.defaultAiProvider
         set(value) { settings.defaultAiProvider = value }
 
-    /** 实时拉取某供应商官方可用模型列表（用于设置/节点的模型下拉）。 */
+    fun cachedModels(provider: AiProvider): List<String> =
+        settings.cachedModels(provider.name)
+
+    /** 手动拉取某供应商官方可用模型列表，成功后持久缓存。 */
     suspend fun fetchModels(provider: AiProvider): Result<List<String>> =
-        visionAi.listModels(provider)
+        visionAi.listModels(provider).onSuccess { models ->
+            settings.setCachedModels(provider.name, models)
+        }
 
     var thumbnailMaxSide: Int
         get() = settings.thumbnailMaxSide
@@ -94,13 +101,41 @@ class MainViewModel(
         get() = settings.aiImageMaxSide
         set(value) { settings.aiImageMaxSide = value }
 
-    val shizukuState: StateFlow<ShizukuManager.Status> = ShizukuManager.state
+    var recordEngine: String
+        get() = settings.recordEngine
+        set(value) { settings.recordEngine = value }
 
-    fun requestShizukuPermission() {
-        viewModelScope.launch { ShizukuManager.requestPermission() }
+    val wifiAdbState: StateFlow<WifiAdbManager.Status> = WifiAdbManager.state
+
+    fun saveWifiAdbConfig(host: String, pairingPort: Int, connectPort: Int) {
+        WifiAdbManager.saveConfig(host, pairingPort, connectPort)
     }
 
-    fun refreshShizuku() { ShizukuManager.refresh() }
+    fun pairWifiAdb(pairingCode: String) {
+        viewModelScope.launch { WifiAdbManager.pair(pairingCode) }
+    }
+
+    fun connectWifiAdb() {
+        viewModelScope.launch { WifiAdbManager.connect() }
+    }
+
+    fun pairAndConnectWifiAdb(pairingCode: String) {
+        viewModelScope.launch { WifiAdbManager.pairAndConnectAuto(pairingCode) }
+    }
+
+    fun disconnectWifiAdb() { WifiAdbManager.disconnect() }
+
+    fun refreshWifiAdb() { WifiAdbManager.refresh() }
+
+    /** 未连接时用已保存的密钥重连（免重配对），已连接时仅核验。 */
+    fun reconnectWifiAdb() {
+        viewModelScope.launch {
+            WifiAdbManager.refresh()
+            if (!WifiAdbManager.state.value.connected) {
+                WifiAdbManager.reconnect()
+            }
+        }
+    }
 
     fun play(scriptId: Long) {
         viewModelScope.launch { ServiceBus.playerCmd.emit(ServiceBus.PlayerCmd.Play(scriptId)) }

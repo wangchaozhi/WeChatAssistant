@@ -1,26 +1,35 @@
 package com.wangchaozhi.wechatassistant.service
 
 import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import android.view.WindowManager
-import com.wangchaozhi.wechatassistant.util.ShizukuManager
+import com.flyfishxu.kadb.shell.AdbShellPacket
+import com.flyfishxu.kadb.shell.AdbShellStream
+import com.wangchaozhi.wechatassistant.util.WifiAdbManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.nio.charset.Charset
 
 /**
- * 通过 Shizuku 启动 `getevent -lt`，解析多点触控协议得到每根手指完整的 down/move/up 序列，
+ * 通过 Wi-Fi ADB 启动 `getevent -lt`，解析多点触控协议得到每根手指完整的 down/move/up 序列，
  * 转成 [ServiceBus.RawTouch] 发到 [ServiceBus.recordedTap]。
  * 单实例，调用方负责生命周期。
  */
-class ShizukuTouchReader(private val context: Context) {
+class WifiAdbTouchReader(private val context: Context) {
 
     private var job: Job? = null
-    private var process: Process? = null
+    private var shell: WifiAdbManager.DedicatedShell? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     private data class TouchscreenInfo(
         val devicePath: String,
@@ -31,37 +40,115 @@ class ShizukuTouchReader(private val context: Context) {
     fun start(scope: CoroutineScope, onError: (String) -> Unit = {}) {
         stop()
         job = scope.launch(Dispatchers.IO) {
-            val devices = probeTouchscreens()
+            var devices = probeTouchscreens()
+            if (devices.isEmpty()) {
+                // 多半是上次录制后连接已失效（getevent -lp 跑在死连接上返回空），重连后再探一次
+                Log.i(TAG, "probe empty, try reconnect then re-probe")
+                if (WifiAdbManager.reconnect().isSuccess) {
+                    devices = probeTouchscreens()
+                }
+            }
             if (devices.isEmpty()) {
                 withContext(Dispatchers.Main) { onError("未找到可读取的触摸设备") }
                 return@launch
             }
             Log.i(TAG, "start getevent devices=${devices.joinToString { it.devicePath }}")
-            val cmd = arrayOf("sh", "-c", "exec getevent -lt")
-            val proc = ShizukuManager.newProcess(cmd)
-            if (proc == null) {
-                withContext(Dispatchers.Main) { onError("Shizuku 无法启动 getevent") }
-                return@launch
-            }
-            process = proc
+            // 录制期间保持 Wi-Fi 无线和 CPU 不休眠，缓解后台被掐网导致的断连
+            acquireLocks()
             try {
-                runReader(proc, devices)
-                withContext(Dispatchers.Main) { onError("Shizuku 录制进程已退出") }
+                var failures = 0
+                while (isActive) {
+                    // getevent 跑在独立连接上：关它会弄坏所在连接，但不影响主连接（探测/校验仍可用）
+                    val ds = WifiAdbManager.openDedicatedShell("getevent -lt")
+                    if (ds == null) {
+                        if (!reconnectOrStop(onError, ++failures)) break
+                        continue
+                    }
+                    shell = ds
+                    val startedAt = SystemClock.uptimeMillis()
+                    val dropped = try {
+                        runReader(ds.stream, devices)
+                        true // getevent 进程退出，也按断连处理，尝试恢复
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        // 连接断开时 kadb 的 stream.read() 会抛异常，不能让它崩掉整个 App
+                        Log.w(TAG, "reader stopped", e)
+                        true
+                    } finally {
+                        runCatching { ds.close() }
+                        if (shell === ds) shell = null
+                    }
+                    if (!isActive || !dropped) break
+                    // 连接稳定运行过一段时间则重置失败计数，避免长录制累积触顶
+                    if (SystemClock.uptimeMillis() - startedAt > HEALTHY_RUN_MS) failures = 0
+                    if (!reconnectOrStop(onError, ++failures)) break
+                }
             } finally {
-                runCatching { proc.destroy() }
-                if (process === proc) process = null
+                releaseLocks()
             }
         }
     }
 
-    fun stop() {
-        runCatching { process?.destroy() }
-        process = null
-        job?.cancel()
-        job = null
+    /**
+     * 断连后自动重连（无需重配对）。返回 false 表示放弃。
+     * 进度只打日志，不走 onError——onError 会在「未录到点击时」中止录制，不能被中间态触发。
+     */
+    private suspend fun reconnectOrStop(onError: (String) -> Unit, failures: Int): Boolean {
+        if (failures > MAX_RECONNECT) {
+            withContext(Dispatchers.Main) { onError("Wi-Fi ADB 连接已断开，多次自动重连失败") }
+            return false
+        }
+        Log.i(TAG, "connection dropped, auto reconnect attempt $failures/$MAX_RECONNECT")
+        val result = WifiAdbManager.reconnect()
+        if (result.isFailure) {
+            Log.w(TAG, "reconnect failed: ${result.exceptionOrNull()?.message}")
+            withContext(Dispatchers.Main) {
+                onError("Wi-Fi ADB 连接已断开，自动重连失败：${result.exceptionOrNull()?.message ?: ""}")
+            }
+            return false
+        }
+        Log.i(TAG, "auto reconnect ok, restart getevent")
+        return true
     }
 
-    private fun runReader(proc: Process, devices: List<TouchscreenInfo>) {
+    private fun acquireLocks() {
+        runCatching {
+            val wm = context.applicationContext.getSystemService(WifiManager::class.java)
+            val lockMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            } else {
+                @Suppress("DEPRECATION")
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            }
+            wifiLock = wm?.createWifiLock(lockMode, "wca:adb")?.apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            val pm = context.applicationContext.getSystemService(PowerManager::class.java)
+            wakeLock = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "wca:adb-record")?.apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }
+    }
+
+    private fun releaseLocks() {
+        runCatching { wifiLock?.takeIf { it.isHeld }?.release() }
+        runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
+        wifiLock = null
+        wakeLock = null
+    }
+
+    fun stop() {
+        runCatching { shell?.close() }
+        shell = null
+        job?.cancel()
+        job = null
+        releaseLocks()
+    }
+
+    private fun runReader(stream: AdbShellStream, devices: List<TouchscreenInfo>) {
         val screenW: Int
         val screenH: Int
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -119,11 +206,12 @@ class ShizukuTouchReader(private val context: Context) {
             ServiceBus.recordedTap.tryEmit(raw)
         }
 
-        proc.inputStream.bufferedReader().useLines { lines ->
-            for (line in lines) {
-                val parsed = parseLine(line, defaultDevice.devicePath) ?: continue
+        streamLines(stream) { line ->
+            val parsed = parseLine(line, defaultDevice.devicePath)
+            if (parsed != null) {
                 val path = parsed.devicePath
-                val device = deviceByPath[path] ?: continue
+                val device = deviceByPath[path]
+                if (device != null) {
                 when (val ev = parsed.event) {
                     is Event.Slot -> deviceState(path).currentSlot = ev.index.coerceAtLeast(0)
                     is Event.TrackingId -> {
@@ -154,6 +242,31 @@ class ShizukuTouchReader(private val context: Context) {
                         }
                     }
                 }
+                }
+            }
+        }
+    }
+
+    private inline fun streamLines(stream: AdbShellStream, onLine: (String) -> Unit) {
+        val charset = Charset.defaultCharset()
+        val pending = StringBuilder()
+        while (true) {
+            when (val packet = stream.read()) {
+                is AdbShellPacket.StdOut -> {
+                    pending.append(packet.payload.toString(charset))
+                    while (true) {
+                        val i = pending.indexOf("\n")
+                        if (i < 0) break
+                        val line = pending.substring(0, i).trimEnd('\r')
+                        pending.delete(0, i + 1)
+                        onLine(line)
+                    }
+                }
+                is AdbShellPacket.Exit -> {
+                    if (pending.isNotEmpty()) onLine(pending.toString())
+                    return
+                }
+                is AdbShellPacket.StdError -> Unit
             }
         }
     }
@@ -196,8 +309,7 @@ class ShizukuTouchReader(private val context: Context) {
     }
 
     private suspend fun probeTouchscreens(): List<TouchscreenInfo> = withContext(Dispatchers.IO) {
-        val proc = ShizukuManager.newProcess(arrayOf("sh", "-c", "getevent -lp")) ?: return@withContext null
-        val text = try { proc.inputStream.bufferedReader().readText() } finally { runCatching { proc.destroy() } }
+        val text = WifiAdbManager.shell("getevent -lp").getOrNull() ?: return@withContext null
         parseProbe(text)
     }.orEmpty()
 
@@ -234,6 +346,8 @@ class ShizukuTouchReader(private val context: Context) {
     }
 
     companion object {
-        private const val TAG = "ShizukuTouchReader"
+        private const val TAG = "WifiAdbTouchReader"
+        private const val MAX_RECONNECT = 4
+        private const val HEALTHY_RUN_MS = 20_000L
     }
 }

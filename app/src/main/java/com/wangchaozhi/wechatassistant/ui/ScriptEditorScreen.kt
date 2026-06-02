@@ -227,6 +227,7 @@ fun ScriptEditorScreen(
                     launchTemplatePicker()
                 },
                 fetchModels = { viewModel.fetchModels(it) },
+                cachedModels = { viewModel.cachedModels(it) },
             )
         }
 
@@ -469,9 +470,29 @@ internal fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Act
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 0L,
     )
-    ActionType.SNAPSHOT, ActionType.IF_PAGE_CHANGED -> Action(
+    ActionType.SNAPSHOT -> Action(
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 0L, aiPrompt = "快照1",
+    )
+    ActionType.IF_PAGE_CHANGED -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L, aiPrompt = "快照1", matchThreshold = 0.95f,
+    )
+    ActionType.IF_IMAGE_EXISTS -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L,
+    )
+    ActionType.IF_TEXT_EXISTS -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L, aiPrompt = "",
+    )
+    ActionType.LOOP -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L, retryCount = 3,
+    )
+    ActionType.STOP -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L,
     )
 }
 
@@ -488,7 +509,11 @@ internal fun typeLabel(t: ActionType): String = when (t) {
     ActionType.WAIT_PAGE_CHANGE -> "等待页面变化"
     ActionType.START -> "开始"
     ActionType.SNAPSHOT -> "快照"
-    ActionType.IF_PAGE_CHANGED -> "条件：页面是否变化"
+    ActionType.IF_PAGE_CHANGED -> "条件：检测变化"
+    ActionType.IF_IMAGE_EXISTS -> "条件：图像是否存在"
+    ActionType.IF_TEXT_EXISTS -> "条件：文字是否存在"
+    ActionType.LOOP -> "循环 N 次"
+    ActionType.STOP -> "停止"
 }
 
 private fun describe(a: Action): String = when (a.type) {
@@ -496,7 +521,7 @@ private fun describe(a: Action): String = when (a.type) {
     ActionType.LONG_PRESS -> "(${a.startX.toInt()}, ${a.startY.toInt()}) 长按 ${a.durationMs}ms"
     ActionType.SWIPE ->
         "(${a.startX.toInt()},${a.startY.toInt()})→(${a.endX.toInt()},${a.endY.toInt()}) ${a.durationMs}ms"
-    ActionType.WAIT -> "等待 ${a.durationMs}ms"
+    ActionType.WAIT -> "等待 ${a.durationMs}ms" + if (a.randomExtraMs > 0) " (+0~${a.randomExtraMs}ms)" else ""
     ActionType.SCREENSHOT_AI -> "prompt: \"${a.aiPrompt?.take(40) ?: ""}\""
     ActionType.AI_TAP -> "目标: \"${a.aiPrompt?.take(40) ?: ""}\""
     ActionType.IMAGE_MATCH ->
@@ -507,7 +532,13 @@ private fun describe(a: Action): String = when (a.type) {
         "页面没变就重复前 ${a.repeatPrevSteps} 步 · 最多 ${a.retryCount} 次 · 间隔 ${a.durationMs}ms"
     ActionType.START -> "图入口"
     ActionType.SNAPSHOT -> "记录当前页面为基准"
-    ActionType.IF_PAGE_CHANGED -> "页面变了走「是」，否则走「否」"
+    ActionType.IF_PAGE_CHANGED ->
+        "检测到变化走「是」，否则走「否」 · 阈值 ${"%.2f".format(a.matchThreshold)}"
+    ActionType.IF_IMAGE_EXISTS ->
+        "${if (a.templatePath != null) "找到图" else "⚠ 未设模板"} 走「有」，否则走「无」 · 阈值 ${"%.2f".format(a.matchThreshold)}"
+    ActionType.IF_TEXT_EXISTS -> "出现文字「${a.aiPrompt?.take(20) ?: ""}」走「有」，否则走「无」"
+    ActionType.LOOP -> "循环 ${a.retryCount} 次 · 继续走「环」，到次数走「完」"
+    ActionType.STOP -> "终止整张图的执行"
 }
 
 @Composable
@@ -572,6 +603,7 @@ internal fun EditActionDialog(
     onRecaptureTemplate: () -> Unit = {},
     onPickRegion: () -> Unit = {},
     fetchModels: suspend (AiProvider) -> Result<List<String>> = { Result.success(it.models) },
+    cachedModels: (AiProvider) -> List<String> = { emptyList() },
 ) {
     var startX by remember { mutableStateOf(action.startX.toString()) }
     var startY by remember { mutableStateOf(action.startY.toString()) }
@@ -579,6 +611,7 @@ internal fun EditActionDialog(
     var endY by remember { mutableStateOf(action.endY.toString()) }
     var duration by remember { mutableStateOf(action.durationMs.toString()) }
     var delay by remember { mutableStateOf(action.delayBeforeMs.toString()) }
+    var randomExtra by remember { mutableStateOf(action.randomExtraMs.toString()) }
     var aiPrompt by remember { mutableStateOf(action.aiPrompt.orEmpty()) }
     var threshold by remember { mutableStateOf(action.matchThreshold.toString()) }
     var retry by remember { mutableStateOf(action.retryCount.toString()) }
@@ -626,7 +659,9 @@ internal fun EditActionDialog(
                     ActionType.WAIT, ActionType.SCREENSHOT_AI, ActionType.AI_TAP,
                     ActionType.IMAGE_MATCH, ActionType.PASTE, ActionType.ENTER,
                     ActionType.WAIT_PAGE_CHANGE,
-                    ActionType.START, ActionType.SNAPSHOT, ActionType.IF_PAGE_CHANGED -> { /* no coords */ }
+                    ActionType.START, ActionType.SNAPSHOT, ActionType.IF_PAGE_CHANGED,
+                    ActionType.IF_IMAGE_EXISTS, ActionType.IF_TEXT_EXISTS,
+                    ActionType.LOOP, ActionType.STOP -> { /* no coords */ }
                 }
                 if (action.type == ActionType.WAIT_PAGE_CHANGE) {
                     Spacer(Modifier.height(6.dp))
@@ -640,9 +675,22 @@ internal fun EditActionDialog(
                     if (action.type != ActionType.SCREENSHOT_AI &&
                         action.type != ActionType.IMAGE_MATCH &&
                         action.type != ActionType.PASTE &&
-                        action.type != ActionType.ENTER
+                        action.type != ActionType.ENTER &&
+                        action.type != ActionType.IF_IMAGE_EXISTS &&
+                        action.type != ActionType.IF_TEXT_EXISTS &&
+                        action.type != ActionType.LOOP &&
+                        action.type != ActionType.STOP
                     ) {
-                        NumField(duration, { duration = it }, "持续 (ms)", Modifier.fillMaxWidth())
+                        NumField(
+                            duration,
+                            { duration = it },
+                            if (action.type == ActionType.IF_PAGE_CHANGED) "检测时长 (ms，0=单次检测)" else "持续 (ms)",
+                            Modifier.fillMaxWidth(),
+                        )
+                    }
+                    if (action.type == ActionType.WAIT) {
+                        Spacer(Modifier.height(6.dp))
+                        NumField(randomExtra, { randomExtra = it }, "随机附加等待 (0~N ms，0=不抖动)", Modifier.fillMaxWidth())
                     }
                     Spacer(Modifier.height(6.dp))
                     NumField(delay, { delay = it }, "执行前等待 (ms)", Modifier.fillMaxWidth())
@@ -662,6 +710,7 @@ internal fun EditActionDialog(
                         provider = aiProvider,
                         model = aiModel,
                         fetchModels = fetchModels,
+                        cachedModels = cachedModels,
                         onProvider = { p ->
                             // 切换供应商时，模型名跟着切到新供应商的默认模型；「跟随全局」则清空。
                             if (p != aiProvider) {
@@ -711,8 +760,10 @@ internal fun EditActionDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Spacer(Modifier.height(6.dp))
+                    NumField(threshold, { threshold = it }, "变化阈值 (0~1，越大越敏感)", Modifier.fillMaxWidth())
                     Spacer(Modifier.height(4.dp))
-                    Text("两个快照都填＝比较 A 与 B 是否不同；不同走「是」、相同走「否」。需保证快照在条件之前执行。",
+                    Text("留空 B＝在检测时长内持续对比 A 与实时页面，检测到变化立刻走「是」，超时走「否」。两个快照都填＝比较 A 与 B 是否不同。",
                         style = MaterialTheme.typography.bodySmall)
                 }
                 if (action.type == ActionType.IMAGE_MATCH) {
@@ -732,6 +783,48 @@ internal fun EditActionDialog(
                         Text(if (action.templatePath != null) "重新选图 / 截取模板" else "选图 / 截取模板")
                     }
                 }
+                if (action.type == ActionType.IF_IMAGE_EXISTS) {
+                    Spacer(Modifier.height(6.dp))
+                    NumField(threshold, { threshold = it }, "匹配阈值 (0~1，越大越严格)", Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TemplateThumb(action.templatePath, 64.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            if (action.templatePath != null) "找到此图走「有」，否则走「无」（只判断不点击）" else "⚠ 尚未设置模板图",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedButton(onClick = onRecaptureTemplate, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (action.templatePath != null) "重新选图 / 截取模板" else "选图 / 截取模板")
+                    }
+                }
+                if (action.type == ActionType.IF_TEXT_EXISTS) {
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = aiPrompt,
+                        onValueChange = { aiPrompt = it },
+                        label = { Text("要查找的文字（页面出现即走「有」）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text("在当前页面控件树里按「包含、忽略大小写」匹配；找到走「有」、没找到走「无」。",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                if (action.type == ActionType.LOOP) {
+                    Spacer(Modifier.height(6.dp))
+                    NumField(retry, { retry = it }, "循环次数", Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(4.dp))
+                    Text("把「环」出口连回循环体、循环体末尾再连回本节点：循环体会执行指定次数，然后走「完」出口往下。",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                if (action.type == ActionType.STOP) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("执行到此节点立即终止整张图（含整体循环）。",
+                        style = MaterialTheme.typography.bodySmall)
+                }
             }
         },
         confirmButton = {
@@ -744,6 +837,7 @@ internal fun EditActionDialog(
                         endY = endY.toFloatOrNull() ?: action.endY,
                         durationMs = duration.toLongOrNull() ?: action.durationMs,
                         delayBeforeMs = delay.toLongOrNull() ?: action.delayBeforeMs,
+                        randomExtraMs = randomExtra.toLongOrNull()?.coerceAtLeast(0L) ?: action.randomExtraMs,
                         aiPrompt = aiPrompt.ifBlank { null },
                         matchThreshold = threshold.toFloatOrNull()?.coerceIn(0.1f, 1f)
                             ?: action.matchThreshold,
@@ -786,6 +880,7 @@ private fun AiProviderModelPicker(
     provider: AiProvider?,
     model: String,
     fetchModels: suspend (AiProvider) -> Result<List<String>>,
+    cachedModels: (AiProvider) -> List<String>,
     onProvider: (AiProvider?) -> Unit,
     onModel: (String) -> Unit,
 ) {
@@ -818,7 +913,7 @@ private fun AiProviderModelPicker(
             model = model,
             onModel = onModel,
             fetch = { fetchModels(provider) },
-            fallback = provider.models,
+            fallback = cachedModels(provider).ifEmpty { provider.models },
             refreshKey = provider,
         )
     }

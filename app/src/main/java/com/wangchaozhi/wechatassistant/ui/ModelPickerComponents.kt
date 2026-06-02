@@ -64,8 +64,8 @@ private fun Modifier.verticalScrollbar(
 
 /**
  * 可手填 + 弹窗选择的模型选择器。
- * 首次出现自动拉取一次官方模型列表并缓存；▼ 弹出居中的选择对话框（带搜索框、大列表），
- * 看得更清楚，搜索过滤时也不会跳动。刷新按钮重新拉取，拉取失败退回内置 [fallback]。
+ * 默认使用持久缓存或内置 [fallback]；刷新按钮才拉取官方模型列表并由调用方持久缓存。
+ * ▼ 弹出居中的选择对话框（带搜索框、大列表），看得更清楚，搜索过滤时也不会跳动。
  */
 @Composable
 fun RefreshableModelField(
@@ -95,11 +95,10 @@ fun RefreshableModelField(
         }
     }
 
-    // 首次出现自动拉取一次并缓存；refreshKey 变化（如切换供应商）时清空缓存重新拉取。
     LaunchedEffect(refreshKey) {
         fetched = null
         query = ""
-        load()
+        error = null
     }
 
     Column(modifier.fillMaxWidth()) {
