@@ -82,6 +82,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.data.model.Script
+import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.service.CaptureForegroundService
 import com.wangchaozhi.wechatassistant.service.OverlayService
 import com.wangchaozhi.wechatassistant.service.ServiceBus
@@ -241,6 +242,7 @@ private fun MainScreen(
     val overlayReady by viewModel.overlayReady.collectAsState()
     val playerState by viewModel.playerState.collectAsState()
     val lastAnswer by viewModel.lastAiAnswer.collectAsState()
+    val recordModeDescription = recordingModeDescription(viewModel.recordEngine)
 
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
     var notifGranted by remember { mutableStateOf(checkNotificationGranted(ctx)) }
@@ -268,7 +270,7 @@ private fun MainScreen(
                     Column {
                         Text("连点助手", fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Wi-Fi ADB 录制 · 无障碍回放",
+                            recordModeDescription,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -322,7 +324,7 @@ private fun MainScreen(
                 )
             }
             item {
-                PlayerStatusCard(playerState, lastAnswer, onStop = viewModel::stop)
+                PlayerStatusCard(playerState, lastAnswer, recordModeDescription, onStop = viewModel::stop)
             }
             item {
                 Row(
@@ -359,6 +361,12 @@ private fun MainScreen(
         }
     }
 }
+
+private fun recordingModeDescription(recordEngine: String): String =
+    when (recordEngine) {
+        SettingsRepository.RECORD_ENGINE_WIFI_ADB -> "Wi-Fi ADB 录制 · 无障碍回放"
+        else -> "悬浮层录制 · 无障碍回放"
+    }
 
 @Composable
 private fun HeroStatusCard(
@@ -546,6 +554,7 @@ private fun StatusDot(ok: Boolean) {
 private fun PlayerStatusCard(
     state: com.wangchaozhi.wechatassistant.service.ServiceBus.PlayerState,
     lastAnswer: String?,
+    recordModeDescription: String,
     onStop: () -> Unit,
 ) {
     val playing = state is
@@ -581,7 +590,7 @@ private fun PlayerStatusCard(
                     }
                 }
             } else {
-                Text("悬浮面板启动后，可在任意应用中录制 Wi-Fi ADB 手势并回放。")
+                Text("悬浮面板启动后，可在任意应用中使用 $recordModeDescription。")
             }
             if (!lastAnswer.isNullOrBlank()) {
                 HorizontalDivider()

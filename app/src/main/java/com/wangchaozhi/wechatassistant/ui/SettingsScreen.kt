@@ -26,11 +26,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -58,9 +61,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
@@ -198,12 +206,10 @@ private fun QwenCard(
                 }
             }
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
+            ApiKeyField(
                 value = apiKey,
                 onValueChange = onApiKey,
-                label = { Text("DashScope API Key") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
+                label = "DashScope API Key",
             )
             RefreshableModelField(
                 model = model,
@@ -306,12 +312,10 @@ private fun ModelScopeCard(
                 }
             }
             Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
+            ApiKeyField(
                 value = apiKey,
                 onValueChange = onApiKey,
-                label = { Text("ModelScope API Key") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
+                label = "ModelScope API Key",
             )
             RefreshableModelField(
                 model = model,
@@ -322,6 +326,48 @@ private fun ModelScopeCard(
             )
         }
     }
+}
+
+@Composable
+private fun ApiKeyField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+) {
+    var visible by remember { mutableStateOf(false) }
+    val clipboard: ClipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        visualTransformation = if (visible) {
+            VisualTransformation.None
+        } else {
+            PasswordVisualTransformation()
+        },
+        trailingIcon = {
+            Row {
+                IconButton(onClick = { visible = !visible }) {
+                    Icon(
+                        imageVector = if (visible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                        contentDescription = if (visible) "隐藏 API Key" else "显示 API Key",
+                    )
+                }
+                IconButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(value))
+                        Toast.makeText(context, "API Key 已复制", Toast.LENGTH_SHORT).show()
+                    },
+                    enabled = value.isNotBlank(),
+                ) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = "复制 API Key")
+                }
+            }
+        },
+    )
 }
 
 @Composable
