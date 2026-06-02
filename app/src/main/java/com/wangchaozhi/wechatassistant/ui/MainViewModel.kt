@@ -28,7 +28,7 @@ import java.util.Locale
 
 sealed interface Screen {
     data object Home : Screen
-    data class Editor(val scriptId: Long) : Screen
+    data class Editor(val scriptId: Long?) : Screen
     data object History : Screen
     data object Settings : Screen
 }
@@ -147,6 +147,11 @@ class MainViewModel(
 
     fun delete(scriptId: Long) {
         viewModelScope.launch { scriptRepo.delete(scriptId) }
+    }
+
+    fun selectScript(scriptId: Long) {
+        settings.selectedScriptId = scriptId
+        ServiceBus.selectedScriptChanged.tryEmit(scriptId)
     }
 
     fun createEmptyScript(onCreated: (Long) -> Unit) {

@@ -134,9 +134,7 @@ class MainActivity : ComponentActivity() {
                             onOpenHistory = { viewModel.navigate(Screen.History) },
                             onOpenSettings = { viewModel.navigate(Screen.Settings) },
                             onCreateScript = {
-                                viewModel.createEmptyScript { id ->
-                                    viewModel.navigate(Screen.Editor(id))
-                                }
+                                viewModel.navigate(Screen.Editor(null))
                             },
                             onRequestNotificationPermission = ::requestNotificationPermission,
                             onRequestOverlayPermission = ::requestOverlayPermission,
@@ -182,7 +180,11 @@ class MainActivity : ComponentActivity() {
 
     private fun handleLaunchIntent(intent: Intent?) {
         val id = intent?.getLongExtra(EXTRA_EDIT_SCRIPT_ID, -1L) ?: -1L
-        if (id > 0) viewModel.navigate(Screen.Editor(id))
+        val createNew = intent?.getBooleanExtra(EXTRA_NEW_SCRIPT, false) == true
+        when {
+            id > 0 -> viewModel.navigate(Screen.Editor(id))
+            createNew -> viewModel.navigate(Screen.Editor(null))
+        }
     }
 
     private fun requestNotificationPermission() {
@@ -212,6 +214,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_EDIT_SCRIPT_ID = "extra_edit_script_id"
+        const val EXTRA_NEW_SCRIPT = "extra_new_script"
     }
 }
 

@@ -53,6 +53,7 @@ class OverlayService : LifecycleService() {
     private var recording = false
     private var recBtn: Button? = null
     private var statusLabel: TextView? = null
+    private var statusScriptLabel: TextView? = null
     private var playStopBtn: Button? = null
     private var selectBtn: Button? = null
     // 已选脚本：「选」按钮设定，「▶」按钮据此直接播放，再次播放无需重选。
@@ -60,6 +61,7 @@ class OverlayService : LifecycleService() {
     private var selectedScriptName: String? = null
     private var extraActionsRow: LinearLayout? = null
     private var scriptPickerView: View? = null
+    private var scriptPickerOutsideDismissAt: Long = 0L
     private var renameView: View? = null
     private var bubble: LinearLayout? = null
     private var bubbleText: TextView? = null
@@ -125,6 +127,14 @@ class OverlayService : LifecycleService() {
         lifecycleScope.launch {
             ServiceBus.lastAiResult.collect { res ->
                 if (res != null) panelView?.post { renderAiResult(res) }
+            }
+        }
+        lifecycleScope.launch {
+            ServiceBus.selectedScriptChanged.collect { id ->
+                val data = App.from(this@OverlayService).scriptRepo.load(id)
+                if (data != null) {
+                    setSelectedScript(id, data.script.name)
+                }
             }
         }
         lifecycleScope.launch {
@@ -246,14 +256,38 @@ class OverlayService : LifecycleService() {
             text = "连点"
             setTextColor(Color.WHITE)
             textSize = 14f
-            minWidth = dp(84)
-            maxWidth = dp(120)
             gravity = Gravity.CENTER_VERTICAL
             isSingleLine = true
             ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        val scriptNameLabel = TextView(ctx).apply {
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            gravity = Gravity.CENTER_VERTICAL
+            isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+            marqueeRepeatLimit = -1
+            setHorizontallyScrolling(true)
+            isSelected = true
+            visibility = View.GONE
+        }
+        val statusBox = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumWidth = dp(84)
             setPadding(0, 0, dp(8), 0)
+            addView(label, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ))
+            addView(scriptNameLabel, LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f,
+            ))
         }
         statusLabel = label
+        statusScriptLabel = scriptNameLabel
         val btnRec = compactBtn(ctx, "录制") { toggleRecording(recBtn ?: return@compactBtn) }
         recBtn = btnRec
         val btnHome = compactBtn(ctx, "↗") { launchHome(null) }
@@ -341,7 +375,10 @@ class OverlayService : LifecycleService() {
             }
             captureSnapshotForRecording()
         }
-        topRow.addView(label)
+        topRow.addView(statusBox, LinearLayout.LayoutParams(
+            dp(120),
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ))
         topRow.addView(btnRec)
         topRow.addView(btnSelect)
         topRow.addView(btnPlayStop)
@@ -480,7 +517,7 @@ class OverlayService : LifecycleService() {
             dividerDrawable = colSpacer
         }
         // 选脚本：先声明，供播放/编辑的「未选」兜底当作选择器锚点。
-        val select = compactBtn(ctx, "选") { }
+        val select = compactBtn(ctx, "☰") { }
         attachCollapsedDrag(select) { lifecycleScope.launch { showScriptPicker(select) } }
         val play = compactBtn(ctx, "▶") { }
         collapsedPlayBtn = play
@@ -490,10 +527,10 @@ class OverlayService : LifecycleService() {
         val handle = compactBtn(ctx, "‹") { }
         attachCollapsedDrag(handle) { expandPanel() }
         attachCollapsedDrag(bar) { expandPanel() }
-        bar.addView(handle)
         bar.addView(play)
         bar.addView(select)
         bar.addView(edit)
+        bar.addView(handle)
         return bar
     }
 
@@ -902,6 +939,7 @@ class OverlayService : LifecycleService() {
     }
 
     private fun refreshStatus() {
+        statusScriptLabel?.visibility = View.GONE
         if (recording) {
             val captured = recordedTouches.size + recordedPastes.size +
                 recordedEnters.size + recordedTemplates.size + recordedSnapshots.size
@@ -909,11 +947,21 @@ class OverlayService : LifecycleService() {
             return
         }
         val st = ServiceBus.playerState.value
-        statusLabel?.text = when (st) {
-            is ServiceBus.PlayerState.Playing ->
-                "播放中 · ${st.stepIndex + 1}/${st.totalSteps}"
-            ServiceBus.PlayerState.Idle ->
-                selectedScriptName?.let { "已选 · $it" } ?: "连点"
+        when (st) {
+            is ServiceBus.PlayerState.Playing -> {
+                statusLabel?.text = "播放中 · ${st.stepIndex + 1}/${st.totalSteps}"
+            }
+            ServiceBus.PlayerState.Idle -> {
+                val name = selectedScriptName
+                if (name != null) {
+                    statusLabel?.text = "已选 · "
+                    statusScriptLabel?.text = name
+                    statusScriptLabel?.visibility = View.VISIBLE
+                    statusScriptLabel?.isSelected = true
+                } else {
+                    statusLabel?.text = "连点"
+                }
+            }
         }
         val playing = st is ServiceBus.PlayerState.Playing
         playStopBtn?.text = if (playing) "停止" else "▶"
@@ -1252,6 +1300,9 @@ class OverlayService : LifecycleService() {
             dismissScriptPicker()
             return
         }
+        if (SystemClock.uptimeMillis() - scriptPickerOutsideDismissAt < 250L) {
+            return
+        }
         val scripts = App.from(this).scriptRepo.observeScripts().first()
         val ctx = this
         val list = LinearLayout(ctx).apply {
@@ -1277,25 +1328,23 @@ class OverlayService : LifecycleService() {
         }
         val newItem = TextView(ctx).apply {
             text = "+ 新建脚本"
-            setTextColor(Color.parseColor("#80D8FF"))
+            setTextColor(Color.WHITE)
             textSize = 14f
             setPadding(dp(12), dp(10), dp(12), dp(10))
             setOnClickListener {
                 dismissScriptPicker()
-                lifecycleScope.launch {
-                    val name = "脚本_" + SimpleDateFormat("MMdd_HHmm", Locale.getDefault())
-                        .format(Date())
-                    val id = App.from(this@OverlayService).scriptRepo
-                        .save(Script(name = name), emptyList())
-                    launchHome(id)
-                }
+                launchHome(null, createNewScript = true)
             }
         }
         list.addView(newItem)
         val loc = IntArray(2)
         anchor.getLocationOnScreen(loc)
+        val pickerWidth = dp(200)
+        val gap = dp(8)
+        val screenW = resources.displayMetrics.widthPixels
+        val openToLeft = loc[0] + anchor.width / 2 > screenW / 2
         val params = WindowManager.LayoutParams(
-            dp(200),
+            pickerWidth,
             ViewGroup.LayoutParams.WRAP_CONTENT,
             overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
@@ -1303,11 +1352,16 @@ class OverlayService : LifecycleService() {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = loc[0]
-            y = loc[1] + anchor.height
+            x = if (openToLeft) {
+                (loc[0] - pickerWidth - gap).coerceAtLeast(gap)
+            } else {
+                (loc[0] + anchor.width + gap).coerceAtMost(screenW - pickerWidth - gap)
+            }
+            y = (loc[1] - gap).coerceAtLeast(gap)
         }
         list.setOnTouchListener { _, e ->
             if (e.action == MotionEvent.ACTION_OUTSIDE) {
+                scriptPickerOutsideDismissAt = SystemClock.uptimeMillis()
                 dismissScriptPicker(); true
             } else false
         }
@@ -1320,11 +1374,14 @@ class OverlayService : LifecycleService() {
         scriptPickerView = null
     }
 
-    private fun launchHome(scriptIdToEdit: Long?) {
+    private fun launchHome(scriptIdToEdit: Long?, createNewScript: Boolean = false) {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             if (scriptIdToEdit != null) {
                 putExtra(MainActivity.EXTRA_EDIT_SCRIPT_ID, scriptIdToEdit)
+            }
+            if (createNewScript) {
+                putExtra(MainActivity.EXTRA_NEW_SCRIPT, true)
             }
         }
         startActivity(intent)
@@ -1348,6 +1405,7 @@ class OverlayService : LifecycleService() {
         panelView = null
         recBtn = null
         statusLabel = null
+        statusScriptLabel = null
         bubbleHandler.removeCallbacks(hideBubble)
         bubble = null
         bubbleText = null

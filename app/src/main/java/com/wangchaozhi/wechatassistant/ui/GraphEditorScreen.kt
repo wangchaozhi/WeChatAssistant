@@ -61,6 +61,9 @@ import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 
 // 节点固定尺寸（图空间 dp，scale=1 时）。端口锚点由此算术求得，免去逐卡测量。
@@ -93,7 +96,7 @@ private fun outAnchor(n: Action, port: Int): Offset = when {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GraphEditorScreen(
-    scriptId: Long,
+    scriptId: Long?,
     viewModel: MainViewModel,
     onBack: () -> Unit,
 ) {
@@ -129,6 +132,16 @@ fun GraphEditorScreen(
     }
 
     LaunchedEffect(scriptId) {
+        if (scriptId == null) {
+            val name = "脚本_" + SimpleDateFormat("MMdd_HHmm", Locale.getDefault()).format(Date())
+            script = Script(name = name)
+            nodes.clear()
+            nodes.add(0, Action(id = tempId--, scriptId = 0L, index = 0,
+                type = ActionType.START, startX = 0f, startY = 0f, posX = 120f, posY = 120f))
+            edges.clear()
+            loaded = true
+            return@LaunchedEffect
+        }
         val data = viewModel.loadGraphScript(scriptId)
         if (data != null) {
             script = data.script
@@ -168,7 +181,7 @@ fun GraphEditorScreen(
     fun addNode(type: ActionType, viewportCenterPx: Offset) {
         pushUndo()
         val g = screenToGraph(viewportCenterPx)
-        nodes += newDefaultAction(scriptId, nodes.size, type).copy(
+        nodes += newDefaultAction(scriptId ?: 0L, nodes.size, type).copy(
             id = tempId--, posX = g.x - NODE_W / 2, posY = g.y - NODE_H / 2,
         )
     }
@@ -178,7 +191,7 @@ fun GraphEditorScreen(
         // 一个出口可连多条线（运行时按顺序依次执行）；仅去重完全相同的边。
         if (edges.any { it.fromActionId == fromId && it.fromPort == fromPort && it.toActionId == toId }) return
         pushUndo()
-        edges += Edge(scriptId = scriptId, fromActionId = fromId, toActionId = toId, fromPort = fromPort)
+        edges += Edge(scriptId = scriptId ?: 0L, fromActionId = fromId, toActionId = toId, fromPort = fromPort)
     }
 
     Scaffold(
@@ -206,7 +219,11 @@ fun GraphEditorScreen(
                     }
                     TextButton(onClick = {
                         val s = script ?: return@TextButton
-                        viewModel.saveGraph(s, nodes.toList(), edges.toList()) { onBack() }
+                        val selectAfterSave = scriptId == null
+                        viewModel.saveGraph(s, nodes.toList(), edges.toList()) { savedId ->
+                            if (selectAfterSave) viewModel.selectScript(savedId)
+                            onBack()
+                        }
                     }) { Text("保存") }
                 },
             )

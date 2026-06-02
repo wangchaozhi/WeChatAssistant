@@ -47,6 +47,7 @@ object ServiceBus {
     }
 
     val overlayCmd = MutableSharedFlow<OverlayCmd>(extraBufferCapacity = 16)
+    val selectedScriptChanged = MutableSharedFlow<Long>(extraBufferCapacity = 4)
 
     val pasteCmd = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
     val pasteResult = MutableSharedFlow<Boolean>(extraBufferCapacity = 4)
