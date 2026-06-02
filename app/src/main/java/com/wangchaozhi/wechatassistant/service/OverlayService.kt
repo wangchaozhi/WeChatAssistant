@@ -54,6 +54,10 @@ class OverlayService : LifecycleService() {
     private var recBtn: Button? = null
     private var statusLabel: TextView? = null
     private var playStopBtn: Button? = null
+    private var selectBtn: Button? = null
+    // 已选脚本：「选」按钮设定，「▶」按钮据此直接播放，再次播放无需重选。
+    private var selectedScriptId: Long? = null
+    private var selectedScriptName: String? = null
     private var extraActionsRow: LinearLayout? = null
     private var scriptPickerView: View? = null
     private var renameView: View? = null
@@ -76,7 +80,8 @@ class OverlayService : LifecycleService() {
     // 面板收起/展开
     private var panelParams: WindowManager.LayoutParams? = null
     private var panelContent: View? = null
-    private var collapsedHandle: View? = null
+    private var collapsedBar: View? = null
+    private var collapsedPlayBtn: Button? = null
     private var collapsed = false
     private val adbReader by lazy { WifiAdbTouchReader(this) }
     // 「边录边放」注入进行中：FLAG_NOT_TOUCHABLE 异步生效，注入的那一下可能在生效前又被本层抓到，
@@ -91,6 +96,7 @@ class OverlayService : LifecycleService() {
         wm = getSystemService(WindowManager::class.java)
         startForegroundCompat()
         showPanel()
+        restoreSelectedScript()
         ServiceBus.overlayReady.value = true
         lifecycleScope.launch {
             ServiceBus.recordedTap.collect { tap ->
@@ -241,8 +247,10 @@ class OverlayService : LifecycleService() {
             setTextColor(Color.WHITE)
             textSize = 14f
             minWidth = dp(84)
+            maxWidth = dp(120)
             gravity = Gravity.CENTER_VERTICAL
             isSingleLine = true
+            ellipsize = android.text.TextUtils.TruncateAt.END
             setPadding(0, 0, dp(8), 0)
         }
         statusLabel = label
@@ -268,19 +276,15 @@ class OverlayService : LifecycleService() {
             setPadding(0, 0, dp(8), 0)
         }
         extraActionsRow = nodesRow
-        val btnPlayStop = compactBtn(ctx, "▶") {
-            if (ServiceBus.playerState.value is ServiceBus.PlayerState.Playing) {
-                ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Stop)
-            } else {
-                if (!ServiceBus.accessibilityReady.value) {
-                    Toast.makeText(ctx, "请先开启「无障碍」服务", Toast.LENGTH_SHORT).show()
-                    return@compactBtn
-                }
-                lifecycleScope.launch {
-                    playStopBtn?.let { showScriptPicker(it) }
-                }
+        // 「选」：只负责挑选脚本，不播放。选中后由「▶」播放。
+        val btnSelect = compactBtn(ctx, "选") {
+            lifecycleScope.launch {
+                selectBtn?.let { showScriptPicker(it) }
             }
         }
+        selectBtn = btnSelect
+        // 「▶/停止」：播放已选脚本；播放中则停止。未选脚本时打开选择器引导先选。
+        val btnPlayStop = compactBtn(ctx, "▶") { togglePlayStop(selectBtn) }
         playStopBtn = btnPlayStop
         val btnAi = compactBtn(ctx, "AI") {
             if (!ServiceBus.captureReady.value) {
@@ -332,6 +336,7 @@ class OverlayService : LifecycleService() {
         }
         topRow.addView(label)
         topRow.addView(btnRec)
+        topRow.addView(btnSelect)
         topRow.addView(btnPlayStop)
         topRow.addView(btnHome)
         topRow.addView(btnClose)
@@ -366,13 +371,12 @@ class OverlayService : LifecycleService() {
             addView(templateRow)
         }
         panelContent = content
-        // 收起后的小把手：可拖到任意位置，轻点展开
-        val handle = compactBtn(ctx, "‹") { }.apply { visibility = View.GONE }
-        collapsedHandle = handle
-        attachHandleDrag(handle)
+        // 收起后的竖排小工具条：手柄(拖动/展开) + 播放 + 选脚本 + 编辑所选脚本
+        val collapsedBarView = buildCollapsedBar(ctx)
+        collapsedBar = collapsedBarView
         container.addView(content)
         container.addView(buildBubble(ctx))
-        container.addView(handle)
+        container.addView(collapsedBarView)
 
         val params = WindowManager.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -398,7 +402,7 @@ class OverlayService : LifecycleService() {
         collapsed = true
         panelContent?.visibility = View.GONE
         bubble?.visibility = View.GONE
-        collapsedHandle?.visibility = View.VISIBLE
+        collapsedBar?.visibility = View.VISIBLE
         // 停靠到屏幕右边缘
         panelView?.post {
             val p = panelParams ?: return@post
@@ -442,7 +446,7 @@ class OverlayService : LifecycleService() {
     private fun expandPanel() {
         if (!collapsed) return
         collapsed = false
-        collapsedHandle?.visibility = View.GONE
+        collapsedBar?.visibility = View.GONE
         panelContent?.visibility = View.VISIBLE
         // 展开后若超出右边缘则回拉，避免被屏幕裁掉
         panelView?.post {
@@ -452,6 +456,64 @@ class OverlayService : LifecycleService() {
             if (p.x + w > screenW) p.x = (screenW - w - dp(8)).coerceAtLeast(0)
             runCatching { wm.updateViewLayout(panelView, p) }
         }
+    }
+
+    /** 折叠态竖排工具条：手柄(拖动/轻点展开) + 播放 + 选脚本 + 编辑所选脚本。 */
+    private fun buildCollapsedBar(ctx: Context): LinearLayout {
+        val colSpacer = GradientDrawable().apply {
+            setSize(1, dp(6))
+            setColor(Color.TRANSPARENT)
+        }
+        val bar = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            visibility = View.GONE
+            showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
+            dividerDrawable = colSpacer
+        }
+        // 选脚本：先声明，供播放/编辑的「未选」兜底当作选择器锚点。
+        val select = compactBtn(ctx, "选") { }
+        select.setOnClickListener { lifecycleScope.launch { showScriptPicker(select) } }
+        val play = compactBtn(ctx, "▶") { togglePlayStop(select) }
+        collapsedPlayBtn = play
+        val edit = compactBtn(ctx, "✎") { editSelectedScript(select) }
+        val handle = compactBtn(ctx, "‹") { }
+        attachHandleDrag(handle)
+        bar.addView(handle)
+        bar.addView(play)
+        bar.addView(select)
+        bar.addView(edit)
+        return bar
+    }
+
+    /** 播放已选脚本；播放中则停止。未选脚本时提示并打开选择器（锚定到 [pickerAnchor]）。 */
+    private fun togglePlayStop(pickerAnchor: View?) {
+        if (ServiceBus.playerState.value is ServiceBus.PlayerState.Playing) {
+            ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Stop)
+            return
+        }
+        if (!ServiceBus.accessibilityReady.value) {
+            Toast.makeText(this, "请先开启「无障碍」服务", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val id = selectedScriptId
+        if (id == null) {
+            Toast.makeText(this, "请先用「选」选择脚本", Toast.LENGTH_SHORT).show()
+            if (pickerAnchor != null) lifecycleScope.launch { showScriptPicker(pickerAnchor) }
+            return
+        }
+        ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Play(id))
+    }
+
+    /** 打开主界面编辑当前所选脚本。未选时提示并打开选择器（锚定到 [pickerAnchor]）。 */
+    private fun editSelectedScript(pickerAnchor: View?) {
+        val id = selectedScriptId
+        if (id == null) {
+            Toast.makeText(this, "请先用「选」选择脚本", Toast.LENGTH_SHORT).show()
+            if (pickerAnchor != null) lifecycleScope.launch { showScriptPicker(pickerAnchor) }
+            return
+        }
+        launchHome(id)
     }
 
     private fun buildBubble(ctx: Context): LinearLayout {
@@ -522,6 +584,8 @@ class OverlayService : LifecycleService() {
     }
 
     private fun showRecordResult(scriptId: Long, scriptName: String) {
+        // 录完即设为已选(并持久化)，按「▶」可直接回放，无需再「选」。
+        setSelectedScript(scriptId, scriptName)
         bubbleHandler.removeCallbacks(hideBubble)
         bubble?.visibility = View.VISIBLE
         bubbleText?.setTextColor(Color.WHITE)
@@ -580,6 +644,10 @@ class OverlayService : LifecycleService() {
                     if (data != null) {
                         App.from(this@OverlayService).scriptRepo
                             .updateScript(data.script.copy(name = newName))
+                        if (selectedScriptId == scriptId) {
+                            selectedScriptName = newName
+                            statusLabel?.post { refreshStatus() }
+                        }
                         bubbleText?.post { bubbleText?.text = "已保存：$newName" }
                         bubbleRenameBtn?.setOnClickListener {
                             showRenameDialog(scriptId, newName)
@@ -833,9 +901,12 @@ class OverlayService : LifecycleService() {
         statusLabel?.text = when (st) {
             is ServiceBus.PlayerState.Playing ->
                 "播放中 · ${st.stepIndex + 1}/${st.totalSteps}"
-            ServiceBus.PlayerState.Idle -> "连点"
+            ServiceBus.PlayerState.Idle ->
+                selectedScriptName?.let { "已选 · $it" } ?: "连点"
         }
-        playStopBtn?.text = if (st is ServiceBus.PlayerState.Playing) "停止" else "▶"
+        val playing = st is ServiceBus.PlayerState.Playing
+        playStopBtn?.text = if (playing) "停止" else "▶"
+        collapsedPlayBtn?.text = if (playing) "停" else "▶"
     }
 
     /** 录制中点「模板」：先截当前目标屏（此时裁剪层尚未显示，截到的是真实页面），再弹裁剪层。 */
@@ -1141,6 +1212,30 @@ class OverlayService : LifecycleService() {
         val region: android.graphics.Rect,
     )
 
+    /** 记录所选脚本：更新内存状态、持久化 id、刷新面板标签。 */
+    private fun setSelectedScript(id: Long, name: String?) {
+        selectedScriptId = id
+        selectedScriptName = name
+        App.from(this).settingsRepo.selectedScriptId = id
+        refreshStatus()
+    }
+
+    /** 启动时按持久化的 id 恢复所选脚本；脚本已被删则清除记录。 */
+    private fun restoreSelectedScript() {
+        val id = App.from(this).settingsRepo.selectedScriptId
+        if (id <= 0L) return
+        lifecycleScope.launch {
+            val data = App.from(this@OverlayService).scriptRepo.load(id)
+            if (data != null) {
+                selectedScriptId = id
+                selectedScriptName = data.script.name
+                statusLabel?.post { refreshStatus() }
+            } else {
+                App.from(this@OverlayService).settingsRepo.selectedScriptId = -1L
+            }
+        }
+    }
+
     private suspend fun showScriptPicker(anchor: View) {
         if (scriptPickerView != null) {
             dismissScriptPicker()
@@ -1150,17 +1245,20 @@ class OverlayService : LifecycleService() {
         val ctx = this
         val list = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.argb(230, 40, 40, 40))
-            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = panelGlassBg()
+            setPadding(dp(8), dp(8), dp(8), dp(8))
         }
         scripts.forEach { s ->
+            val checked = s.id == selectedScriptId
             val item = TextView(ctx).apply {
-                text = s.name
-                setTextColor(Color.WHITE)
+                // 已选脚本最左边显示钩，并高亮文字，便于一眼看出当前选中项。
+                text = (if (checked) "✓ " else "    ") + s.name
+                setTextColor(if (checked) Color.parseColor("#80D8FF") else Color.WHITE)
                 textSize = 14f
                 setPadding(dp(12), dp(10), dp(12), dp(10))
                 setOnClickListener {
-                    ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Play(s.id))
+                    // 只选中、不播放：记录(持久化)所选脚本，播放交给「▶」按钮。
+                    setSelectedScript(s.id, s.name)
                     dismissScriptPicker()
                 }
             }
@@ -1246,6 +1344,9 @@ class OverlayService : LifecycleService() {
         bubbleRenameBtn = null
         bubbleDeleteBtn = null
         playStopBtn = null
+        selectBtn = null
+        collapsedBar = null
+        collapsedPlayBtn = null
         extraActionsRow = null
         dismissScriptPicker()
         dismissRename()
