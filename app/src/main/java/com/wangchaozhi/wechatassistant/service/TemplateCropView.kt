@@ -103,3 +103,85 @@ class TemplateCropView(context: Context, private val bitmap: Bitmap) : View(cont
     /** 当前裁剪框，坐标单位是原截图像素。 */
     fun cropRect(): CropRect = crop
 }
+
+/**
+ * 实时屏幕框选层：不绘制截图，只在真实页面上盖灰蒙版与可拖拽选框。
+ * cropRect() 返回屏幕像素坐标，后续再按该坐标裁当前截图，避免“先截图再框选”的映射误差。
+ */
+class LiveScreenCropView(context: Context) : View(context) {
+
+    private val borderPaint = Paint().apply {
+        color = Color.parseColor("#FF00E5FF")
+        style = Paint.Style.STROKE
+        strokeWidth = 6f
+        isAntiAlias = true
+    }
+    private val handlePaint = Paint().apply {
+        color = Color.parseColor("#FF00E5FF")
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+    private val dimPaint = Paint().apply { color = Color.parseColor("#99000000") }
+    private val handlePx = dp(22f)
+
+    private var crop = CropRect(0f, 0f, 0f, 0f)
+    private var mode = DragMode.NONE
+    private var lastX = 0f
+    private var lastY = 0f
+
+    private fun dp(v: Float) =
+        v * resources.displayMetrics.density
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        if (crop.right <= crop.left || crop.bottom <= crop.top) {
+            crop = CropRect.centered(w.toFloat(), h.toFloat())
+        }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val l = crop.left
+        val t = crop.top
+        val r = crop.right
+        val b = crop.bottom
+        canvas.drawRect(0f, 0f, width.toFloat(), t, dimPaint)
+        canvas.drawRect(0f, b, width.toFloat(), height.toFloat(), dimPaint)
+        canvas.drawRect(0f, t, l, b, dimPaint)
+        canvas.drawRect(r, t, width.toFloat(), b, dimPaint)
+        canvas.drawRect(l, t, r, b, borderPaint)
+        val hr = handlePx * 0.5f
+        canvas.drawCircle(l, t, hr, handlePaint)
+        canvas.drawCircle(r, t, hr, handlePaint)
+        canvas.drawCircle(l, b, hr, handlePaint)
+        canvas.drawCircle(r, b, hr, handlePaint)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                mode = crop.hitTest(event.x, event.y, handlePx)
+                lastX = event.x
+                lastY = event.y
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = event.x - lastX
+                val dy = event.y - lastY
+                crop = crop.apply(mode, dx, dy, width.toFloat(), height.toFloat())
+                lastX = event.x
+                lastY = event.y
+                invalidate()
+            }
+        }
+        return true
+    }
+
+    fun cropRect(): android.graphics.Rect {
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        val l = crop.left.toInt().coerceIn(0, width)
+        val t = crop.top.toInt().coerceIn(0, height)
+        val r = crop.right.toInt().coerceIn(l, width)
+        val b = crop.bottom.toInt().coerceIn(t, height)
+        return android.graphics.Rect(l + loc[0], t + loc[1], r + loc[0], b + loc[1])
+    }
+}

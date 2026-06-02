@@ -247,7 +247,7 @@ class ClickerAccessibilityService : AccessibilityService() {
     /**
      * 从 START 节点出发，沿边深度优先遍历执行图：
      * - SNAPSHOT 节点把当前页面截图存入以「名称」(aiPrompt) 为键的具名寄存器；
-     * - IF_PAGE_CHANGED 节点把当前截图与「指定名称」的快照瞬时比较，变了走出口 0、没变走出口 1；
+     * - IF_PAGE_CHANGED 节点检测「指定名称」快照的图像变化，变了走出口 0、没变走出口 1；
      *   指定的快照若尚未拍过，视为「没变」走出口 1；
      * - 其它节点执行后走出口 0。
      * 一个出口可连多条边：按连线顺序依次深度优先执行（先把第一条分支整支跑完，再下一条）。

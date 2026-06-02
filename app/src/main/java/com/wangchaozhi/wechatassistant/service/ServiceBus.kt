@@ -1,6 +1,7 @@
 package com.wangchaozhi.wechatassistant.service
 
 import android.graphics.Bitmap
+import android.graphics.Rect
 import com.wangchaozhi.wechatassistant.data.model.Script
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,9 +45,29 @@ object ServiceBus {
         data object StartRecording : OverlayCmd
         data object StopRecording : OverlayCmd
         data class RecordedAction(val raw: RawTouch) : OverlayCmd
+        data class RequestSnapshotRegionPick(val requestId: Long, val scriptIdToEdit: Long?) : OverlayCmd
+        data class RequestTemplatePick(val requestId: Long, val scriptIdToEdit: Long?) : OverlayCmd
+        data class FlashRegionMask(val rect: Rect) : OverlayCmd
+        data class FlashPositionMarker(val marker: PositionMarker) : OverlayCmd
     }
 
     val overlayCmd = MutableSharedFlow<OverlayCmd>(extraBufferCapacity = 16)
+    sealed interface PositionMarker {
+        data class Region(val rect: Rect, val label: String) : PositionMarker
+        data class Point(val x: Float, val y: Float, val label: String) : PositionMarker
+        data class Swipe(
+            val startX: Float,
+            val startY: Float,
+            val endX: Float,
+            val endY: Float,
+            val label: String,
+        ) : PositionMarker
+    }
+
+    data class SnapshotRegionPickResult(val requestId: Long, val rect: Rect, val previewPath: String?)
+    val snapshotRegionPickResult = MutableSharedFlow<SnapshotRegionPickResult>(extraBufferCapacity = 4)
+    data class TemplatePickResult(val requestId: Long, val templatePath: String, val rect: Rect)
+    val templatePickResult = MutableSharedFlow<TemplatePickResult>(extraBufferCapacity = 4)
     val selectedScriptChanged = MutableSharedFlow<Long>(extraBufferCapacity = 4)
 
     val pasteCmd = MutableSharedFlow<Unit>(extraBufferCapacity = 4)

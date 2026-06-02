@@ -1,6 +1,8 @@
 package com.wangchaozhi.wechatassistant.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,8 +20,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
@@ -40,6 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -53,10 +61,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.wangchaozhi.wechatassistant.data.model.Action
 import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
+import com.wangchaozhi.wechatassistant.service.ServiceBus
+import kotlin.math.min
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -509,7 +521,7 @@ internal fun typeLabel(t: ActionType): String = when (t) {
     ActionType.WAIT_PAGE_CHANGE -> "等待页面变化"
     ActionType.START -> "开始"
     ActionType.SNAPSHOT -> "快照"
-    ActionType.IF_PAGE_CHANGED -> "条件：检测变化"
+    ActionType.IF_PAGE_CHANGED -> "条件：检测快照变化"
     ActionType.IF_IMAGE_EXISTS -> "条件：图像是否存在"
     ActionType.IF_TEXT_EXISTS -> "条件：文字是否存在"
     ActionType.LOOP -> "循环 N 次"
@@ -533,7 +545,7 @@ private fun describe(a: Action): String = when (a.type) {
     ActionType.START -> "图入口"
     ActionType.SNAPSHOT -> "记录当前页面为基准"
     ActionType.IF_PAGE_CHANGED ->
-        "检测到变化走「是」，否则走「否」 · 阈值 ${"%.2f".format(a.matchThreshold)}"
+        "检测到快照变化走「是」，否则走「否」 · 阈值 ${"%.2f".format(a.matchThreshold)}"
     ActionType.IF_IMAGE_EXISTS ->
         "${if (a.templatePath != null) "找到图" else "⚠ 未设模板"} 走「有」，否则走「无」 · 阈值 ${"%.2f".format(a.matchThreshold)}"
     ActionType.IF_TEXT_EXISTS -> "出现文字「${a.aiPrompt?.take(20) ?: ""}」走「有」，否则走「无」"
@@ -622,6 +634,45 @@ internal fun EditActionDialog(
     // AI 节点：供应商（null=跟随全局）与具体模型。
     var aiProvider by remember { mutableStateOf(AiProvider.parse(action.aiProvider)) }
     var aiModel by remember { mutableStateOf(action.aiModel.orEmpty()) }
+    var showPositionPreview by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    fun showActionPosition() {
+        val sx = startX.toFloatOrNull() ?: action.startX
+        val sy = startY.toFloatOrNull() ?: action.startY
+        val ex = endX.toFloatOrNull() ?: action.endX
+        val ey = endY.toFloatOrNull() ?: action.endY
+        val marker = when (action.type) {
+            ActionType.TAP -> ServiceBus.PositionMarker.Point(sx, sy, "点击")
+            ActionType.LONG_PRESS -> ServiceBus.PositionMarker.Point(sx, sy, "长按")
+            ActionType.SWIPE -> ServiceBus.PositionMarker.Swipe(
+                sx,
+                sy,
+                ex,
+                ey,
+                "滑动",
+            )
+            else -> ServiceBus.PositionMarker.Region(
+                android.graphics.Rect(
+                    sx.toInt(),
+                    sy.toInt(),
+                    ex.toInt(),
+                    ey.toInt(),
+                ),
+                typeLabel(action.type),
+            )
+        }
+        if (ServiceBus.overlayReady.value) {
+            ServiceBus.overlayCmd.tryEmit(ServiceBus.OverlayCmd.FlashPositionMarker(marker))
+        } else {
+            android.widget.Toast.makeText(
+                context,
+                "启动悬浮面板后可在真实屏幕上闪烁显示位置",
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+            if (marker is ServiceBus.PositionMarker.Region) showPositionPreview = true
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -644,6 +695,10 @@ internal fun EditActionDialog(
                             NumField(startX, { startX = it }, "X", Modifier.weight(1f))
                             NumField(startY, { startY = it }, "Y", Modifier.weight(1f))
                         }
+                        Spacer(Modifier.height(6.dp))
+                        OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("显示位置")
+                        }
                     }
                     ActionType.SWIPE -> {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -654,6 +709,10 @@ internal fun EditActionDialog(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             NumField(endX, { endX = it }, "终 X", Modifier.weight(1f))
                             NumField(endY, { endY = it }, "终 Y", Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("显示位置")
                         }
                     }
                     ActionType.WAIT, ActionType.SCREENSHOT_AI, ActionType.AI_TAP,
@@ -684,7 +743,7 @@ internal fun EditActionDialog(
                         NumField(
                             duration,
                             { duration = it },
-                            if (action.type == ActionType.IF_PAGE_CHANGED) "检测时长 (ms，0=单次检测)" else "持续 (ms)",
+                            if (action.type == ActionType.IF_PAGE_CHANGED) "快照检测时长 (ms，0=单次检测)" else "持续 (ms)",
                             Modifier.fillMaxWidth(),
                         )
                     }
@@ -738,7 +797,22 @@ internal fun EditActionDialog(
                         else "范围：整页",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TemplateThumb(action.templatePath, 64.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            if (action.templatePath != null) "快照范围预览" else "尚未现场框选预览",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     Spacer(Modifier.height(4.dp))
+                    if (hasRegion) {
+                        OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("显示位置")
+                        }
+                        Spacer(Modifier.height(4.dp))
+                    }
                     OutlinedButton(onClick = onPickRegion, modifier = Modifier.fillMaxWidth()) {
                         Text(if (hasRegion) "重选屏幕范围" else "选屏幕范围（截图框选）")
                     }
@@ -761,9 +835,9 @@ internal fun EditActionDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(6.dp))
-                    NumField(threshold, { threshold = it }, "变化阈值 (0~1，越大越敏感)", Modifier.fillMaxWidth())
+                    NumField(threshold, { threshold = it }, "快照变化阈值 (0~1，越大越敏感)", Modifier.fillMaxWidth())
                     Spacer(Modifier.height(4.dp))
-                    Text("留空 B＝在检测时长内持续对比 A 与实时页面，检测到变化立刻走「是」，超时走「否」。两个快照都填＝比较 A 与 B 是否不同。",
+                    Text("留空 B＝在检测时长内持续对比快照 A 与实时页面，检测到快照变化立刻走「是」，超时走「否」。两个快照都填＝比较 A 与 B 是否不同。",
                         style = MaterialTheme.typography.bodySmall)
                 }
                 if (action.type == ActionType.IMAGE_MATCH) {
@@ -779,6 +853,18 @@ internal fun EditActionDialog(
                         )
                     }
                     Spacer(Modifier.height(6.dp))
+                    val hasRegion = action.endX > action.startX && action.endY > action.startY
+                    if (hasRegion) {
+                        Text(
+                            "位置：(${action.startX.toInt()},${action.startY.toInt()})-(${action.endX.toInt()},${action.endY.toInt()})",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("显示位置")
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
                     OutlinedButton(onClick = onRecaptureTemplate, modifier = Modifier.fillMaxWidth()) {
                         Text(if (action.templatePath != null) "重新选图 / 截取模板" else "选图 / 截取模板")
                     }
@@ -796,6 +882,18 @@ internal fun EditActionDialog(
                         )
                     }
                     Spacer(Modifier.height(6.dp))
+                    val hasRegion = action.endX > action.startX && action.endY > action.startY
+                    if (hasRegion) {
+                        Text(
+                            "位置：(${action.startX.toInt()},${action.startY.toInt()})-(${action.endX.toInt()},${action.endY.toInt()})",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("显示位置")
+                        }
+                        Spacer(Modifier.height(6.dp))
+                    }
                     OutlinedButton(onClick = onRecaptureTemplate, modifier = Modifier.fillMaxWidth()) {
                         Text(if (action.templatePath != null) "重新选图 / 截取模板" else "选图 / 截取模板")
                     }
@@ -856,6 +954,77 @@ internal fun EditActionDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
+    if (showPositionPreview) {
+        RegionPositionPreviewDialog(
+            title = typeLabel(action.type),
+            left = action.startX,
+            top = action.startY,
+            right = action.endX,
+            bottom = action.endY,
+            onDismiss = { showPositionPreview = false },
+        )
+    }
+}
+
+@Composable
+private fun RegionPositionPreviewDialog(
+    title: String,
+    left: Float,
+    top: Float,
+    right: Float,
+    bottom: Float,
+    onDismiss: () -> Unit,
+) {
+    val dm = LocalContext.current.resources.displayMetrics
+    val screenW = dm.widthPixels.toFloat().coerceAtLeast(1f)
+    val screenH = dm.heightPixels.toFloat().coerceAtLeast(1f)
+    val l = left.coerceIn(0f, screenW)
+    val t = top.coerceIn(0f, screenH)
+    val r = right.coerceIn(l, screenW)
+    val b = bottom.coerceIn(t, screenH)
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(Modifier.fillMaxSize(), color = Color(0xF2000000)) {
+            Column(Modifier.fillMaxSize().padding(12.dp)) {
+                Text("$title · 位置预览", color = Color.White)
+                Spacer(Modifier.height(8.dp))
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        val density = androidx.compose.ui.platform.LocalDensity.current
+                        val cw = with(density) { maxWidth.toPx() }
+                        val ch = with(density) { maxHeight.toPx() }
+                        val scale = min(cw / screenW, ch / screenH)
+                        val dispW = with(density) { (screenW * scale).toDp() }
+                        val dispH = with(density) { (screenH * scale).toDp() }
+                        Box(Modifier.size(dispW, dispH).background(Color(0xFF202124))) {
+                            Canvas(Modifier.fillMaxSize()) {
+                                val dl = l * scale
+                                val dt = t * scale
+                                val dr = r * scale
+                                val db = b * scale
+                                val dim = Color(0xAA000000)
+                                drawRect(dim, Offset(0f, 0f), Size(size.width, dt))
+                                drawRect(dim, Offset(0f, db), Size(size.width, size.height - db))
+                                drawRect(dim, Offset(0f, dt), Size(dl, db - dt))
+                                drawRect(dim, Offset(dr, dt), Size(size.width - dr, db - dt))
+                                drawRect(
+                                    color = Color(0xFF00E5FF),
+                                    topLeft = Offset(dl, dt),
+                                    size = Size(dr - dl, db - dt),
+                                    style = Stroke(width = 4f),
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("知道了") }
+            }
+        }
+    }
 }
 
 @Composable

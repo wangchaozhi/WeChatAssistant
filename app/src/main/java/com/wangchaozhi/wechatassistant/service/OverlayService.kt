@@ -5,8 +5,11 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.content.res.ColorStateList
@@ -22,11 +25,15 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -56,6 +63,7 @@ class OverlayService : LifecycleService() {
     private var statusScriptLabel: TextView? = null
     private var playStopBtn: Button? = null
     private var selectBtn: Button? = null
+    private var liveRegionPickBtn: Button? = null
     // 已选脚本：「选」按钮设定，「▶」按钮据此直接播放，再次播放无需重选。
     private var selectedScriptId: Long? = null
     private var selectedScriptName: String? = null
@@ -77,6 +85,11 @@ class OverlayService : LifecycleService() {
     private val recordedTemplates = mutableListOf<Pair<Long, String>>()
     private val recordedSnapshots = mutableListOf<RecordedSnapshot>()
     private var cropOverlay: View? = null
+    private var pendingLiveRegionPickRequestId: Long? = null
+    private var pendingLiveRegionPickScriptId: Long? = null
+    private var pendingLiveTemplatePickRequestId: Long? = null
+    private var pendingLiveTemplatePickScriptId: Long? = null
+    private var positionMaskView: View? = null
     // 截模板/裁剪期间，屏蔽把全局触摸录进脚本（否则拖裁剪框会被当成操作录下来）。
     @Volatile private var suppressTouchRecording = false
     // 面板收起/展开
@@ -134,6 +147,23 @@ class OverlayService : LifecycleService() {
                 val data = App.from(this@OverlayService).scriptRepo.load(id)
                 if (data != null) {
                     setSelectedScript(id, data.script.name)
+                }
+            }
+        }
+        lifecycleScope.launch {
+            ServiceBus.overlayCmd.collect { cmd ->
+                when (cmd) {
+                    ServiceBus.OverlayCmd.StartRecording,
+                    ServiceBus.OverlayCmd.StopRecording,
+                    is ServiceBus.OverlayCmd.RecordedAction -> Unit
+                    is ServiceBus.OverlayCmd.RequestSnapshotRegionPick ->
+                        beginLiveSnapshotRegionPick(cmd.requestId, cmd.scriptIdToEdit)
+                    is ServiceBus.OverlayCmd.RequestTemplatePick ->
+                        beginLiveTemplatePick(cmd.requestId, cmd.scriptIdToEdit)
+                    is ServiceBus.OverlayCmd.FlashRegionMask ->
+                        showFlashingPositionMarker(ServiceBus.PositionMarker.Region(cmd.rect, "位置"))
+                    is ServiceBus.OverlayCmd.FlashPositionMarker ->
+                        showFlashingPositionMarker(cmd.marker)
                 }
             }
         }
@@ -375,6 +405,12 @@ class OverlayService : LifecycleService() {
             }
             captureSnapshotForRecording()
         }
+        val btnLiveRegionPick = compactBtn(ctx, "框选") {
+            captureLivePickForEditor()
+        }.apply {
+            visibility = View.GONE
+        }
+        liveRegionPickBtn = btnLiveRegionPick
         topRow.addView(statusBox, LinearLayout.LayoutParams(
             dp(92),
             ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -405,6 +441,7 @@ class OverlayService : LifecycleService() {
         templateRow.addView(templateLabel)
         templateRow.addView(btnTemplate)
         templateRow.addView(btnSnapshot)
+        templateRow.addView(btnLiveRegionPick)
         systemRow.addView(btnHome)
         systemRow.addView(btnClose)
         systemRow.addView(btnCollapse)
@@ -968,44 +1005,235 @@ class OverlayService : LifecycleService() {
         collapsedPlayBtn?.text = if (playing) "停" else "▶"
     }
 
-    /** 录制中点「模板」：先截当前目标屏（此时裁剪层尚未显示，截到的是真实页面），再弹裁剪层。 */
+    /** 录制中点「模板」：在真实目标页上直接悬浮框选，确认后再截图裁剪。 */
     private fun captureTemplateForRecording() {
         if (cropOverlay != null) return
-        // 从按下「模板」起就停止录入触摸，直到裁剪层关闭。
         suppressTouchRecording = true
-        lifecycleScope.launch {
-            ServiceBus.lastBitmap.value = null
-            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture)
-            val bmp = kotlinx.coroutines.withTimeoutOrNull(5_000) {
-                ServiceBus.lastBitmap.first { it != null }
-            }
-            if (bmp == null) {
-                Toast.makeText(this@OverlayService, "截图失败", Toast.LENGTH_SHORT).show()
-                suppressTouchRecording = false
-                return@launch
-            }
-            showCropOverlay(bmp)
-        }
+        showLiveTemplateCropOverlayForRecording()
     }
 
     private fun captureSnapshotForRecording() {
         if (cropOverlay != null) return
         suppressTouchRecording = true
-        panelView?.visibility = View.INVISIBLE
-        lifecycleScope.launch {
-            kotlinx.coroutines.delay(120)
-            ServiceBus.lastBitmap.value = null
-            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture)
-            val bmp = kotlinx.coroutines.withTimeoutOrNull(5_000) {
-                ServiceBus.lastBitmap.first { it != null }
+        showLiveSnapshotCropOverlayForRecording()
+    }
+
+    private fun beginLiveSnapshotRegionPick(requestId: Long, scriptIdToEdit: Long?) {
+        pendingLiveRegionPickRequestId = requestId
+        pendingLiveRegionPickScriptId = scriptIdToEdit
+        liveRegionPickBtn?.visibility = View.VISIBLE
+        Toast.makeText(this, "切到目标页面后，点悬浮面板「框选」", Toast.LENGTH_LONG).show()
+    }
+
+    private fun beginLiveTemplatePick(requestId: Long, scriptIdToEdit: Long?) {
+        pendingLiveTemplatePickRequestId = requestId
+        pendingLiveTemplatePickScriptId = scriptIdToEdit
+        liveRegionPickBtn?.visibility = View.VISIBLE
+        Toast.makeText(this, "切到目标页面后，点悬浮面板「框选」", Toast.LENGTH_LONG).show()
+    }
+
+    private fun captureLivePickForEditor() {
+        val snapshotRequestId = pendingLiveRegionPickRequestId
+        val templateRequestId = pendingLiveTemplatePickRequestId
+        if (snapshotRequestId == null && templateRequestId == null) return
+        if (!ServiceBus.captureReady.value) {
+            Toast.makeText(this, "请先在主界面启动「截图服务」", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (cropOverlay != null) return
+        suppressTouchRecording = true
+        if (templateRequestId != null) {
+            showLiveTemplateCropOverlayForEditor(templateRequestId)
+        } else if (snapshotRequestId != null) {
+            showLiveSnapshotCropOverlayForEditor(snapshotRequestId)
+        }
+    }
+
+    private suspend fun captureScreenBitmap(): android.graphics.Bitmap? {
+        ServiceBus.lastBitmap.value = null
+        ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture)
+        return kotlinx.coroutines.withTimeoutOrNull(5_000) {
+            ServiceBus.lastBitmap.first { it != null }
+        }
+    }
+
+    private fun cropBitmapByScreenRect(bmp: android.graphics.Bitmap, rect: Rect): android.graphics.Bitmap? {
+        val dm = resources.displayMetrics
+        val sx = bmp.width.toFloat() / dm.widthPixels.coerceAtLeast(1)
+        val sy = bmp.height.toFloat() / dm.heightPixels.coerceAtLeast(1)
+        val l = (rect.left * sx).roundToInt().coerceIn(0, bmp.width - 1)
+        val t = (rect.top * sy).roundToInt().coerceIn(0, bmp.height - 1)
+        val r = (rect.right * sx).roundToInt().coerceIn(l + 1, bmp.width)
+        val b = (rect.bottom * sy).roundToInt().coerceIn(t + 1, bmp.height)
+        val w = r - l
+        val h = b - t
+        if (w < 8 || h < 8) return null
+        return runCatching { android.graphics.Bitmap.createBitmap(bmp, l, t, w, h) }.getOrNull()
+    }
+
+    private fun showLiveCropOverlay(
+        hintText: String,
+        tooSmallText: String,
+        onConfirmRect: (Rect) -> Unit,
+    ) {
+        val ctx: Context = this
+        val cropView = LiveScreenCropView(ctx)
+        val root = FrameLayout(ctx).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        val hint = TextView(ctx).apply {
+            text = hintText
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setBackgroundColor(Color.parseColor("#99000000"))
+            setPadding(dp(16), dp(12), dp(16), dp(8))
+        }
+        val btnRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(16), dp(8), dp(16), dp(16))
+            setBackgroundColor(Color.parseColor("#99000000"))
+        }
+        val cancel = compactBtn(ctx, "取消") { removeCropOverlay() }
+        val confirm = compactBtn(ctx, "确定") {
+            val rect = cropView.cropRect()
+            if (rect.width() < 8 || rect.height() < 8) {
+                Toast.makeText(ctx, tooSmallText, Toast.LENGTH_SHORT).show()
+                return@compactBtn
             }
-            panelView?.visibility = View.VISIBLE
-            if (bmp == null) {
-                Toast.makeText(this@OverlayService, "截图失败", Toast.LENGTH_SHORT).show()
-                suppressTouchRecording = false
-                return@launch
+            onConfirmRect(rect)
+        }
+        btnRow.addView(cancel)
+        btnRow.addView(confirm)
+        root.addView(cropView, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+        ))
+        root.addView(hint, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.START,
+        ))
+        root.addView(btnRow, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.START,
+        ))
+
+        val params = WindowManager.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        )
+        cropOverlay = root
+        wm.addView(root, params)
+    }
+
+    private fun showLiveTemplateCropOverlayForRecording() {
+        showLiveCropOverlay(
+            hintText = "在真实页面上拖动框选要识别的目标，然后点「确定」",
+            tooSmallText = "裁剪区域太小",
+        ) { rect ->
+            panelView?.visibility = View.INVISIBLE
+            removeCropOverlay()
+            lifecycleScope.launch {
+                kotlinx.coroutines.delay(160)
+                val bmp = captureScreenBitmap()
+                panelView?.visibility = View.VISIBLE
+                val cropped = bmp?.let { cropBitmapByScreenRect(it, rect) }
+                if (cropped == null) {
+                    Toast.makeText(this@OverlayService, "截图失败或裁剪区域太小", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val path = com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
+                    .saveTemplate(this@OverlayService, cropped)
+                cropped.recycle()
+                if (path != null) {
+                    recordedTemplates += recordTimestamp() to path
+                    refreshStatus()
+                    Toast.makeText(this@OverlayService, "已记录找图点击步骤", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@OverlayService, "模板保存失败", Toast.LENGTH_SHORT).show()
+                }
             }
-            showSnapshotCropOverlay(bmp)
+        }
+    }
+
+    private fun showLiveSnapshotCropOverlayForRecording() {
+        showLiveCropOverlay(
+            hintText = "在真实页面上拖动框选快照范围，然后点「确定」",
+            tooSmallText = "框选区域太小",
+        ) { rect ->
+            val name = "快照${recordedSnapshots.size + 1}"
+            recordedSnapshots += RecordedSnapshot(recordTimestamp(), name, rect)
+            refreshStatus()
+            Toast.makeText(this, "已记录快照范围：$name", Toast.LENGTH_SHORT).show()
+            removeCropOverlay()
+        }
+    }
+
+    private fun showLiveSnapshotCropOverlayForEditor(requestId: Long) {
+        showLiveCropOverlay(
+            hintText = "在真实页面上拖动框选快照范围，然后点「确定」",
+            tooSmallText = "框选区域太小",
+        ) { rect ->
+            val scriptIdToEdit = pendingLiveRegionPickScriptId
+            pendingLiveRegionPickRequestId = null
+            pendingLiveRegionPickScriptId = null
+            liveRegionPickBtn?.visibility = View.GONE
+            panelView?.visibility = View.INVISIBLE
+            removeCropOverlay()
+            lifecycleScope.launch {
+                kotlinx.coroutines.delay(160)
+                val bmp = captureScreenBitmap()
+                panelView?.visibility = View.VISIBLE
+                val preview = bmp?.let { cropBitmapByScreenRect(it, rect) }
+                val previewPath = preview?.let {
+                    com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
+                        .saveTemplate(this@OverlayService, it)
+                }
+                preview?.recycle()
+                ServiceBus.snapshotRegionPickResult.tryEmit(
+                    ServiceBus.SnapshotRegionPickResult(requestId, rect, previewPath)
+                )
+                Toast.makeText(this@OverlayService, "已回填快照范围", Toast.LENGTH_SHORT).show()
+                launchHome(scriptIdToEdit)
+            }
+        }
+    }
+
+    private fun showLiveTemplateCropOverlayForEditor(requestId: Long) {
+        showLiveCropOverlay(
+            hintText = "在真实页面上拖动框选要识别的图片，然后点「确定」",
+            tooSmallText = "裁剪区域太小",
+        ) { rect ->
+            val scriptIdToEdit = pendingLiveTemplatePickScriptId
+            pendingLiveTemplatePickRequestId = null
+            pendingLiveTemplatePickScriptId = null
+            liveRegionPickBtn?.visibility = View.GONE
+            panelView?.visibility = View.INVISIBLE
+            removeCropOverlay()
+            lifecycleScope.launch {
+                kotlinx.coroutines.delay(160)
+                val bmp = captureScreenBitmap()
+                panelView?.visibility = View.VISIBLE
+                val cropped = bmp?.let { cropBitmapByScreenRect(it, rect) }
+                if (cropped == null) {
+                    Toast.makeText(this@OverlayService, "截图失败或裁剪区域太小", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val path = com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
+                    .saveTemplate(this@OverlayService, cropped)
+                cropped.recycle()
+                if (path == null) {
+                    Toast.makeText(this@OverlayService, "模板保存失败", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                ServiceBus.templatePickResult.tryEmit(ServiceBus.TemplatePickResult(requestId, path, rect))
+                Toast.makeText(this@OverlayService, "已回填图片模板", Toast.LENGTH_SHORT).show()
+                launchHome(scriptIdToEdit)
+            }
         }
     }
 
@@ -1125,11 +1353,259 @@ class OverlayService : LifecycleService() {
         wm.addView(root, params)
     }
 
+    private fun showEditorSnapshotRegionCropOverlay(requestId: Long, bmp: android.graphics.Bitmap) {
+        val ctx: Context = this
+        val cropView = TemplateCropView(ctx, bmp)
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#F2000000"))
+        }
+        val hint = TextView(ctx).apply {
+            text = "拖动框选快照范围，然后点「确定」"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setPadding(dp(16), dp(12), dp(16), dp(8))
+        }
+        val btnRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(16), dp(8), dp(16), dp(16))
+        }
+        val cancel = compactBtn(ctx, "取消") { removeCropOverlay() }
+        val confirm = compactBtn(ctx, "确定") {
+            val preview = cropView.crop()
+            if (preview == null) {
+                Toast.makeText(ctx, "框选区域太小", Toast.LENGTH_SHORT).show()
+                return@compactBtn
+            }
+            val previewPath = com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
+                .saveTemplate(ctx, preview)
+            preview.recycle()
+            val crop = cropView.cropRect()
+            val dm = resources.displayMetrics
+            val sx = dm.widthPixels.toFloat() / bmp.width.coerceAtLeast(1)
+            val sy = dm.heightPixels.toFloat() / bmp.height.coerceAtLeast(1)
+            val rect = android.graphics.Rect(
+                (crop.left * sx).roundToInt().coerceIn(0, dm.widthPixels),
+                (crop.top * sy).roundToInt().coerceIn(0, dm.heightPixels),
+                (crop.right * sx).roundToInt().coerceIn(0, dm.widthPixels),
+                (crop.bottom * sy).roundToInt().coerceIn(0, dm.heightPixels),
+            )
+            if (rect.width() < 8 || rect.height() < 8) {
+                Toast.makeText(ctx, "框选区域太小", Toast.LENGTH_SHORT).show()
+                return@compactBtn
+            }
+            val scriptIdToEdit = pendingLiveRegionPickScriptId
+            pendingLiveRegionPickRequestId = null
+            pendingLiveRegionPickScriptId = null
+            liveRegionPickBtn?.visibility = View.GONE
+            ServiceBus.snapshotRegionPickResult.tryEmit(
+                ServiceBus.SnapshotRegionPickResult(requestId, rect, previewPath)
+            )
+            Toast.makeText(ctx, "已回填快照范围", Toast.LENGTH_SHORT).show()
+            removeCropOverlay()
+            launchHome(scriptIdToEdit)
+        }
+        btnRow.addView(cancel)
+        btnRow.addView(confirm)
+        root.addView(hint)
+        root.addView(cropView, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(btnRow)
+
+        val params = WindowManager.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        )
+        cropOverlay = root
+        wm.addView(root, params)
+    }
+
+    private fun showEditorTemplateCropOverlay(requestId: Long, bmp: android.graphics.Bitmap) {
+        val ctx: Context = this
+        val cropView = TemplateCropView(ctx, bmp)
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#F2000000"))
+        }
+        val hint = TextView(ctx).apply {
+            text = "拖动框选要识别的图片，然后点「确定」"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setPadding(dp(16), dp(12), dp(16), dp(8))
+        }
+        val btnRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(16), dp(8), dp(16), dp(16))
+        }
+        val cancel = compactBtn(ctx, "取消") { removeCropOverlay() }
+        val confirm = compactBtn(ctx, "确定") {
+            val cropped = cropView.crop()
+            if (cropped == null) {
+                Toast.makeText(ctx, "裁剪区域太小", Toast.LENGTH_SHORT).show()
+                return@compactBtn
+            }
+            val path = com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
+                .saveTemplate(ctx, cropped)
+            cropped.recycle()
+            if (path == null) {
+                Toast.makeText(ctx, "模板保存失败", Toast.LENGTH_SHORT).show()
+                return@compactBtn
+            }
+            val crop = cropView.cropRect()
+            val dm = resources.displayMetrics
+            val sx = dm.widthPixels.toFloat() / bmp.width.coerceAtLeast(1)
+            val sy = dm.heightPixels.toFloat() / bmp.height.coerceAtLeast(1)
+            val rect = android.graphics.Rect(
+                (crop.left * sx).roundToInt().coerceIn(0, dm.widthPixels),
+                (crop.top * sy).roundToInt().coerceIn(0, dm.heightPixels),
+                (crop.right * sx).roundToInt().coerceIn(0, dm.widthPixels),
+                (crop.bottom * sy).roundToInt().coerceIn(0, dm.heightPixels),
+            )
+            val scriptIdToEdit = pendingLiveTemplatePickScriptId
+            pendingLiveTemplatePickRequestId = null
+            pendingLiveTemplatePickScriptId = null
+            liveRegionPickBtn?.visibility = View.GONE
+            ServiceBus.templatePickResult.tryEmit(ServiceBus.TemplatePickResult(requestId, path, rect))
+            Toast.makeText(ctx, "已回填图片模板", Toast.LENGTH_SHORT).show()
+            removeCropOverlay()
+            launchHome(scriptIdToEdit)
+        }
+        btnRow.addView(cancel)
+        btnRow.addView(confirm)
+        root.addView(hint)
+        root.addView(cropView, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(btnRow)
+
+        val params = WindowManager.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        )
+        cropOverlay = root
+        wm.addView(root, params)
+    }
+
     private fun removeCropOverlay() {
         cropOverlay?.let { runCatching { wm.removeView(it) } }
         cropOverlay = null
         // 稍延迟再恢复，吞掉关闭裁剪层时「确定/取消」那一下的触摸，避免被录进去。
         bubbleHandler.postDelayed({ suppressTouchRecording = false }, 250)
+    }
+
+    private fun showFlashingPositionMarker(marker: ServiceBus.PositionMarker) {
+        removePositionMask()
+        val dm = resources.displayMetrics
+        val view = object : View(this) {
+            private val dimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(170, 0, 0, 0)
+                style = Paint.Style.FILL
+            }
+            private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.argb(70, 0, 229, 255)
+                style = Paint.Style.FILL
+            }
+            private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(0, 229, 255)
+                style = Paint.Style.STROKE
+                strokeWidth = dp(3).toFloat()
+            }
+            private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                textSize = dp(14).toFloat()
+                style = Paint.Style.FILL
+            }
+            var visibleFrame = true
+
+            override fun onDraw(canvas: Canvas) {
+                super.onDraw(canvas)
+                val loc = IntArray(2)
+                getLocationOnScreen(loc)
+                val originX = loc[0].toFloat()
+                val originY = loc[1].toFloat()
+                when (marker) {
+                    is ServiceBus.PositionMarker.Region -> {
+                        val safe = Rect(
+                            (marker.rect.left - originX).roundToInt().coerceIn(0, width),
+                            (marker.rect.top - originY).roundToInt().coerceIn(0, height),
+                            (marker.rect.right - originX).roundToInt().coerceIn(0, width),
+                            (marker.rect.bottom - originY).roundToInt().coerceIn(0, height),
+                        )
+                        canvas.drawRect(0f, 0f, width.toFloat(), safe.top.toFloat(), dimPaint)
+                        canvas.drawRect(0f, safe.bottom.toFloat(), width.toFloat(), height.toFloat(), dimPaint)
+                        canvas.drawRect(0f, safe.top.toFloat(), safe.left.toFloat(), safe.bottom.toFloat(), dimPaint)
+                        canvas.drawRect(safe.right.toFloat(), safe.top.toFloat(), width.toFloat(), safe.bottom.toFloat(), dimPaint)
+                        if (visibleFrame) {
+                            canvas.drawRect(safe, fillPaint)
+                            canvas.drawRect(safe, strokePaint)
+                            canvas.drawText(marker.label, safe.left.toFloat(), (safe.top - dp(8)).coerceAtLeast(dp(20)).toFloat(), textPaint)
+                        }
+                    }
+                    is ServiceBus.PositionMarker.Point -> {
+                        canvas.drawColor(Color.argb(90, 0, 0, 0))
+                        if (visibleFrame) {
+                            val x = (marker.x - originX).coerceIn(0f, width.toFloat())
+                            val y = (marker.y - originY).coerceIn(0f, height.toFloat())
+                            val r = dp(22).toFloat()
+                            canvas.drawCircle(x, y, r, fillPaint)
+                            canvas.drawCircle(x, y, r, strokePaint)
+                            canvas.drawLine(x - r * 1.6f, y, x + r * 1.6f, y, strokePaint)
+                            canvas.drawLine(x, y - r * 1.6f, x, y + r * 1.6f, strokePaint)
+                            canvas.drawText(marker.label, x + r, (y - r).coerceAtLeast(dp(20).toFloat()), textPaint)
+                        }
+                    }
+                    is ServiceBus.PositionMarker.Swipe -> {
+                        canvas.drawColor(Color.argb(90, 0, 0, 0))
+                        if (visibleFrame) {
+                            val sx = (marker.startX - originX).coerceIn(0f, width.toFloat())
+                            val sy = (marker.startY - originY).coerceIn(0f, height.toFloat())
+                            val ex = (marker.endX - originX).coerceIn(0f, width.toFloat())
+                            val ey = (marker.endY - originY).coerceIn(0f, height.toFloat())
+                            canvas.drawCircle(sx, sy, dp(12).toFloat(), fillPaint)
+                            canvas.drawLine(sx, sy, ex, ey, strokePaint)
+                            canvas.drawCircle(ex, ey, dp(16).toFloat(), strokePaint)
+                            val angle = atan2((ey - sy).toDouble(), (ex - sx).toDouble()).toFloat()
+                            val arrow = dp(22).toFloat()
+                            val a1 = angle + 2.6f
+                            val a2 = angle - 2.6f
+                            canvas.drawLine(ex, ey, ex + cos(a1) * arrow, ey + sin(a1) * arrow, strokePaint)
+                            canvas.drawLine(ex, ey, ex + cos(a2) * arrow, ey + sin(a2) * arrow, strokePaint)
+                            canvas.drawText(marker.label, sx, (sy - dp(18)).coerceAtLeast(dp(20).toFloat()), textPaint)
+                        }
+                    }
+                }
+            }
+        }
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT,
+        )
+        positionMaskView = view
+        wm.addView(view, params)
+        repeat(7) { i ->
+            bubbleHandler.postDelayed({
+                if (positionMaskView === view) {
+                    view.visibleFrame = i % 2 == 0
+                    view.invalidate()
+                }
+            }, i * 180L)
+        }
+        bubbleHandler.postDelayed({ removePositionMask() }, 1_400L)
+    }
+
+    private fun removePositionMask() {
+        positionMaskView?.let { runCatching { wm.removeView(it) } }
+        positionMaskView = null
     }
 
     private fun persistRecording() {
@@ -1401,6 +1877,7 @@ class OverlayService : LifecycleService() {
         ServiceBus.overlayReady.value = false
         ServiceBus.recordingMode.value = false
         removeCropOverlay()
+        removePositionMask()
         panelView?.let { runCatching { wm.removeView(it) } }
         panelView = null
         recBtn = null
@@ -1413,6 +1890,12 @@ class OverlayService : LifecycleService() {
         bubbleRenameBtn = null
         bubbleDeleteBtn = null
         playStopBtn = null
+        liveRegionPickBtn = null
+        pendingLiveRegionPickRequestId = null
+        pendingLiveRegionPickScriptId = null
+        pendingLiveTemplatePickRequestId = null
+        pendingLiveTemplatePickScriptId = null
+        positionMaskView = null
         selectBtn = null
         collapsedBar = null
         collapsedPlayBtn = null

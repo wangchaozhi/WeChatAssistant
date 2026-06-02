@@ -61,6 +61,7 @@ import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
+import com.wangchaozhi.wechatassistant.service.ServiceBus
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -120,15 +121,18 @@ fun GraphEditorScreen(
     val density = LocalDensity.current.density
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // 选图：pendingRecaptureId=给 IMAGE_MATCH 设模板；pendingRegionId=给 SNAPSHOT 框选屏幕范围。
+    // 选图：pendingRecaptureId=给 IMAGE_MATCH 设模板；pendingLiveRegion=给 SNAPSHOT 现场框选屏幕范围。
     var pendingRecaptureId by remember { mutableStateOf<Long?>(null) }
-    var pendingRegionId by remember { mutableStateOf<Long?>(null) }
+    var pendingLiveRegionId by remember { mutableStateOf<Long?>(null) }
+    var pendingLiveRegionRequestId by remember { mutableStateOf<Long?>(null) }
+    var pendingLiveTemplateId by remember { mutableStateOf<Long?>(null) }
+    var pendingLiveTemplateRequestId by remember { mutableStateOf<Long?>(null) }
     var cropSource by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     val pickImage = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         val bmp = uri?.let { decodeBitmap(context, it) }
-        if (bmp != null) cropSource = bmp else { pendingRecaptureId = null; pendingRegionId = null }
+        if (bmp != null) cropSource = bmp else pendingRecaptureId = null
     }
 
     LaunchedEffect(scriptId) {
@@ -165,6 +169,53 @@ fun GraphEditorScreen(
         if (undoStack.size > 50) undoStack.removeAt(0)
         redoStack.clear()
     }
+
+    fun applyLiveSnapshotRegion(result: ServiceBus.SnapshotRegionPickResult) {
+        if (result.requestId != pendingLiveRegionRequestId) return
+        val id = pendingLiveRegionId ?: return
+        val i = nodes.indexOfFirst { it.id == id }
+        if (i >= 0) {
+            pushUndo()
+            val rect = result.rect
+            nodes[i] = nodes[i].copy(
+                startX = rect.left.toFloat(),
+                startY = rect.top.toFloat(),
+                endX = rect.right.toFloat(),
+                endY = rect.bottom.toFloat(),
+                templatePath = result.previewPath ?: nodes[i].templatePath,
+            )
+        }
+        pendingLiveRegionId = null
+        pendingLiveRegionRequestId = null
+    }
+
+    fun applyLiveTemplate(result: ServiceBus.TemplatePickResult) {
+        if (result.requestId != pendingLiveTemplateRequestId) return
+        val id = pendingLiveTemplateId ?: return
+        val i = nodes.indexOfFirst { it.id == id }
+        if (i >= 0) {
+            pushUndo()
+            val rect = result.rect
+            nodes[i] = nodes[i].copy(
+                startX = rect.left.toFloat(),
+                startY = rect.top.toFloat(),
+                endX = rect.right.toFloat(),
+                endY = rect.bottom.toFloat(),
+                templatePath = result.templatePath,
+            )
+        }
+        pendingLiveTemplateId = null
+        pendingLiveTemplateRequestId = null
+    }
+
+    LaunchedEffect(Unit) {
+        ServiceBus.snapshotRegionPickResult.collect { applyLiveSnapshotRegion(it) }
+    }
+
+    LaunchedEffect(Unit) {
+        ServiceBus.templatePickResult.collect { applyLiveTemplate(it) }
+    }
+
     fun undo() {
         val last = undoStack.removeLastOrNull() ?: return
         redoStack.add(nodes.toList() to edges.toList())
@@ -406,22 +457,65 @@ fun GraphEditorScreen(
                 fetchModels = { viewModel.fetchModels(it) },
                 cachedModels = { viewModel.cachedModels(it) },
                 onRecaptureTemplate = {
-                    pendingRecaptureId = ed
+                    if (!ServiceBus.overlayReady.value) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "请先启动悬浮面板，再现场框选图片模板",
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                        return@EditActionDialog
+                    }
+                    if (!ServiceBus.captureReady.value) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "请先启动截图服务，再现场框选图片模板",
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                        return@EditActionDialog
+                    }
+                    val requestId = System.currentTimeMillis()
+                    pendingLiveTemplateId = ed
+                    pendingLiveTemplateRequestId = requestId
                     editingId = null
-                    pickImage.launch(
-                        androidx.activity.result.PickVisualMediaRequest(
-                            androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
-                        )
+                    ServiceBus.overlayCmd.tryEmit(
+                        ServiceBus.OverlayCmd.RequestTemplatePick(requestId, script?.id?.takeIf { it > 0 })
                     )
+                    android.widget.Toast.makeText(
+                        context,
+                        "切到目标页面后，点悬浮面板「框选」",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
                 },
                 onPickRegion = {
-                    pendingRegionId = ed
+                    if (!ServiceBus.overlayReady.value) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "请先启动悬浮面板，再现场框选快照范围",
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                        return@EditActionDialog
+                    }
+                    if (!ServiceBus.captureReady.value) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "请先启动截图服务，再现场框选快照范围",
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                        return@EditActionDialog
+                    }
+                    val requestId = System.currentTimeMillis()
+                    pendingLiveRegionId = ed
+                    pendingLiveRegionRequestId = requestId
                     editingId = null
-                    pickImage.launch(
-                        androidx.activity.result.PickVisualMediaRequest(
-                            androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
-                        )
+                    ServiceBus.overlayCmd.tryEmit(
+                        ServiceBus.OverlayCmd.RequestSnapshotRegionPick(requestId, script?.id?.takeIf { it > 0 })
                     )
+                    android.widget.Toast.makeText(
+                        context,
+                        "切到目标页面后，点悬浮面板「框选」",
+                        android.widget.Toast.LENGTH_LONG,
+                    )
+                        .show()
                 },
             )
         }
@@ -468,36 +562,18 @@ fun GraphEditorScreen(
     // 裁剪/框选弹窗
     val src = cropSource
     if (src != null) {
-        val regionId = pendingRegionId
-        if (regionId != null) {
-            RegionBandDialog(
-                source = src,
-                onDismiss = { cropSource = null; pendingRegionId = null },
-                onConfirm = { rect ->
-                    val i = nodes.indexOfFirst { it.id == regionId }
-                    if (i >= 0) {
-                        pushUndo()
-                        nodes[i] = nodes[i].copy(
-                            startX = rect.left, startY = rect.top, endX = rect.right, endY = rect.bottom,
-                        )
-                    }
-                    cropSource = null; pendingRegionId = null
-                },
-            )
-        } else {
-            TemplateCropDialog(
-                source = src,
-                onDismiss = { cropSource = null; pendingRecaptureId = null },
-                onConfirm = { bitmap ->
-                    val path = com.wangchaozhi.wechatassistant.feature.match
-                        .TemplateMatchUseCase.saveTemplate(context, bitmap)
-                    val id = pendingRecaptureId
-                    val i = if (id != null) nodes.indexOfFirst { it.id == id } else -1
-                    if (i >= 0 && path != null) nodes[i] = nodes[i].copy(templatePath = path)
-                    cropSource = null; pendingRecaptureId = null
-                },
-            )
-        }
+        TemplateCropDialog(
+            source = src,
+            onDismiss = { cropSource = null; pendingRecaptureId = null },
+            onConfirm = { bitmap ->
+                val path = com.wangchaozhi.wechatassistant.feature.match
+                    .TemplateMatchUseCase.saveTemplate(context, bitmap)
+                val id = pendingRecaptureId
+                val i = if (id != null) nodes.indexOfFirst { it.id == id } else -1
+                if (i >= 0 && path != null) nodes[i] = nodes[i].copy(templatePath = path)
+                cropSource = null; pendingRecaptureId = null
+            },
+        )
     }
 }
 
@@ -670,7 +746,7 @@ private val NODE_GROUPS: List<Pair<String, List<Pair<ActionType, String>>>> = li
     ),
     "快照 / 条件" to listOf(
         ActionType.SNAPSHOT to "快照（记基准）",
-        ActionType.IF_PAGE_CHANGED to "检测变化",
+        ActionType.IF_PAGE_CHANGED to "检测快照变化",
         ActionType.IF_IMAGE_EXISTS to "图像是否存在",
         ActionType.IF_TEXT_EXISTS to "文字是否存在",
     ),
