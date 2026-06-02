@@ -1,6 +1,7 @@
 package com.wangchaozhi.wechatassistant.feature.qwen
 
 import android.graphics.Bitmap
+import com.wangchaozhi.wechatassistant.feature.ai.AiReasoningEffort
 import com.wangchaozhi.wechatassistant.util.toBase64Jpeg
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -36,13 +37,14 @@ class QwenRepository(
         model: String = "qwen3.5-omni-flash",
         maxSide: Int = 1280,
         quality: Int = 80,
+        reasoningEffort: AiReasoningEffort = AiReasoningEffort.DEFAULT,
     ): Result<String> = withContext(Dispatchers.IO) {
         val key = apiKeyProvider().trim()
         if (key.isEmpty()) return@withContext Result.failure(
             IllegalStateException("尚未配置千问 API Key，请到设置中填入。")
         )
         val base64 = bitmap.toBase64Jpeg(quality = quality, maxSide = maxSide)
-        val body = buildRequestBody(model, prompt, base64)
+        val body = buildRequestBody(model, prompt, base64, reasoningEffort)
         val req = Request.Builder()
             .url(ENDPOINT)
             .addHeader("Authorization", "Bearer $key")
@@ -95,7 +97,12 @@ class QwenRepository(
         return data.mapNotNull { it.jsonObject["id"]?.jsonPrimitive?.contentOrNull }
     }
 
-    private fun buildRequestBody(model: String, prompt: String, base64: String): JsonObject =
+    private fun buildRequestBody(
+        model: String,
+        prompt: String,
+        base64: String,
+        reasoningEffort: AiReasoningEffort,
+    ): JsonObject =
         buildJsonObject {
             put("model", model)
             put("input", buildJsonObject {
@@ -115,6 +122,8 @@ class QwenRepository(
             })
             put("parameters", buildJsonObject {
                 put("result_format", "message")
+                reasoningEffort.enableThinking?.let { put("enable_thinking", it) }
+                reasoningEffort.thinkingBudget?.let { put("thinking_budget", it) }
             })
         }
 

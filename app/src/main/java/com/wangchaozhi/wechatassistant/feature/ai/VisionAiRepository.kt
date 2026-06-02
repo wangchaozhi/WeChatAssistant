@@ -13,6 +13,7 @@ class VisionAiRepository(
     private val defaultProvider: () -> AiProvider,
     private val defaultDashScopeModel: () -> String,
     private val defaultModelScopeModel: () -> String,
+    private val defaultReasoningEffort: () -> AiReasoningEffort,
 ) {
 
     /** 拉取某供应商当前官方可用的模型 id 列表。 */
@@ -40,9 +41,24 @@ class VisionAiRepository(
         quality: Int = 80,
     ): Result<String> {
         val (provider, model) = resolve(providerName, modelName)
+        val reasoningEffort = defaultReasoningEffort()
         return when (provider) {
-            AiProvider.DASHSCOPE -> qwen.ask(bitmap, prompt, model, maxSide = maxSide, quality = quality)
-            AiProvider.MODELSCOPE -> modelScope.ask(bitmap, prompt, model, maxSide = maxSide, quality = quality)
+            AiProvider.DASHSCOPE -> qwen.ask(
+                bitmap,
+                prompt,
+                model,
+                maxSide = maxSide,
+                quality = quality,
+                reasoningEffort = reasoningEffort,
+            )
+            AiProvider.MODELSCOPE -> modelScope.ask(
+                bitmap,
+                prompt,
+                model,
+                maxSide = maxSide,
+                quality = quality,
+                reasoningEffort = reasoningEffort,
+            )
         }
     }
 }

@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
+import com.wangchaozhi.wechatassistant.feature.ai.AiReasoningEffort
 import com.wangchaozhi.wechatassistant.service.CaptureForegroundService
 import com.wangchaozhi.wechatassistant.service.ServiceBus
 import com.wangchaozhi.wechatassistant.util.copyToClipboard
@@ -90,6 +91,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var msKey by remember { mutableStateOf(viewModel.modelScopeApiKey) }
     var msModel by remember { mutableStateOf(viewModel.modelScopeModel) }
     var defaultProvider by remember { mutableStateOf(viewModel.defaultAiProvider) }
+    var reasoningEffort by remember { mutableStateOf(viewModel.aiReasoningEffort) }
     var qwenCachedModels by remember { mutableStateOf(viewModel.cachedModels(AiProvider.DASHSCOPE)) }
     var modelScopeCachedModels by remember { mutableStateOf(viewModel.cachedModels(AiProvider.MODELSCOPE)) }
     var recordEngine by remember { mutableStateOf(viewModel.recordEngine) }
@@ -127,6 +129,8 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 DefaultProviderCard(
                     provider = defaultProvider,
                     onProvider = { defaultProvider = it; viewModel.defaultAiProvider = it },
+                    reasoningEffort = reasoningEffort,
+                    onReasoningEffort = { reasoningEffort = it; viewModel.aiReasoningEffort = it },
                     prompt = prompt,
                     onPrompt = { prompt = it; viewModel.defaultPrompt = it },
                 )
@@ -226,6 +230,8 @@ private fun QwenCard(
 private fun DefaultProviderCard(
     provider: String,
     onProvider: (String) -> Unit,
+    reasoningEffort: String,
+    onReasoningEffort: (String) -> Unit,
     prompt: String,
     onPrompt: (String) -> Unit,
 ) {
@@ -274,6 +280,10 @@ private fun DefaultProviderCard(
                     }
                 }
             }
+            ReasoningEffortPicker(
+                effort = AiReasoningEffort.parse(reasoningEffort),
+                onEffort = { onReasoningEffort(it.name) },
+            )
             OutlinedTextField(
                 value = prompt,
                 onValueChange = onPrompt,
@@ -283,6 +293,59 @@ private fun DefaultProviderCard(
         }
     }
 }
+
+@Composable
+private fun ReasoningEffortPicker(
+    effort: AiReasoningEffort,
+    onEffort: (AiReasoningEffort) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("推理模式", style = MaterialTheme.typography.labelMedium)
+                Text(effort.label, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            AiReasoningEffort.entries.forEach { item ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(item.label)
+                            Text(
+                                reasoningEffortHint(item),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    onClick = {
+                        onEffort(item)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun reasoningEffortHint(effort: AiReasoningEffort): String =
+    when (effort) {
+        AiReasoningEffort.DEFAULT -> "不传推理参数，保留模型默认行为"
+        AiReasoningEffort.OFF -> "传 enable_thinking=false，减少延迟和成本"
+        AiReasoningEffort.LOW -> "低预算推理，适合轻量判断"
+        AiReasoningEffort.MEDIUM -> "中等预算推理，平衡速度和效果"
+        AiReasoningEffort.HIGH -> "高预算推理，适合复杂图文推断"
+    }
 
 @Composable
 private fun ModelScopeCard(

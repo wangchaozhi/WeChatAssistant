@@ -10,6 +10,7 @@ import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.data.repo.ScriptRepository
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiTapUseCase
+import com.wangchaozhi.wechatassistant.feature.ai.AiReasoningEffort
 import com.wangchaozhi.wechatassistant.feature.ai.ModelScopeRepository
 import com.wangchaozhi.wechatassistant.feature.ai.ScreenshotAiUseCase
 import com.wangchaozhi.wechatassistant.feature.ai.VisionAiRepository
@@ -110,6 +111,9 @@ class App : Application() {
             },
             defaultDashScopeModel = { settingsRepo.qwenModel },
             defaultModelScopeModel = { settingsRepo.modelScopeModel },
+            defaultReasoningEffort = {
+                AiReasoningEffort.parse(settingsRepo.aiReasoningEffort)
+            },
         )
     }
 

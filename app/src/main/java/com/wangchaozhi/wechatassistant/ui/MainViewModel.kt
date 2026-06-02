@@ -84,6 +84,10 @@ class MainViewModel(
         get() = settings.defaultAiProvider
         set(value) { settings.defaultAiProvider = value }
 
+    var aiReasoningEffort: String
+        get() = settings.aiReasoningEffort
+        set(value) { settings.aiReasoningEffort = value }
+
     fun cachedModels(provider: AiProvider): List<String> =
         settings.cachedModels(provider.name)
 

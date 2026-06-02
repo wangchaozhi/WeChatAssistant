@@ -48,6 +48,10 @@ class SettingsRepository(context: Context) {
         get() = prefs.getString(KEY_DEFAULT_PROVIDER, DEFAULT_PROVIDER).orEmpty()
         set(value) = prefs.edit().putString(KEY_DEFAULT_PROVIDER, value).apply()
 
+    var aiReasoningEffort: String
+        get() = prefs.getString(KEY_REASONING_EFFORT, DEFAULT_REASONING_EFFORT).orEmpty()
+        set(value) = prefs.edit().putString(KEY_REASONING_EFFORT, value).apply()
+
     var thumbnailMaxSide: Int
         get() = prefs.getInt(KEY_THUMB_SIDE, DEFAULT_THUMB_SIDE)
         set(value) = prefs.edit().putInt(KEY_THUMB_SIDE, value).apply()
@@ -103,6 +107,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_MS_API = "modelscope_api_key"
         private const val KEY_MS_MODEL = "modelscope_model"
         private const val KEY_DEFAULT_PROVIDER = "default_ai_provider"
+        private const val KEY_REASONING_EFFORT = "ai_reasoning_effort"
         private const val KEY_THUMB_SIDE = "thumb_max_side"
         private const val KEY_AI_SIDE = "ai_image_max_side"
         private const val KEY_MODEL_CACHE_PREFIX = "model_cache_"
@@ -116,6 +121,7 @@ class SettingsRepository(context: Context) {
         const val DEFAULT_MODEL = "qwen3.5-omni-flash"
         const val DEFAULT_MS_MODEL = "Qwen/Qwen3.5-122B-A10B"
         const val DEFAULT_PROVIDER = "DASHSCOPE"
+        const val DEFAULT_REASONING_EFFORT = "DEFAULT"
         const val DEFAULT_PROMPT = "请识别截图中的内容并简要回答。"
         const val DEFAULT_THUMB_SIDE = 480
         const val DEFAULT_AI_SIDE = 1280
