@@ -27,6 +27,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.abs
@@ -45,6 +46,7 @@ import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.ui.MainActivity
+import com.wangchaozhi.wechatassistant.ui.typeLabel
 import com.wangchaozhi.wechatassistant.util.WifiAdbManager
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -1788,11 +1790,20 @@ class OverlayService : LifecycleService() {
         }
         scripts.forEach { s ->
             val checked = s.id == selectedScriptId
-            val item = TextView(ctx).apply {
+            val scriptBox = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            val header = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val name = TextView(ctx).apply {
                 // 已选脚本最左边显示钩，并高亮文字，便于一眼看出当前选中项。
                 text = (if (checked) "✓ " else "    ") + s.name
                 setTextColor(if (checked) Color.parseColor("#80D8FF") else Color.WHITE)
                 textSize = 14f
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
                 setPadding(dp(12), dp(10), dp(12), dp(10))
                 setOnClickListener {
                     // 只选中、不播放：记录(持久化)所选脚本，播放交给「▶」按钮。
@@ -1800,7 +1811,34 @@ class OverlayService : LifecycleService() {
                     dismissScriptPicker()
                 }
             }
-            list.addView(item)
+            // 展开后列出该脚本的节点；点节点会在真实屏幕闪烁其位置。首次展开才懒加载。
+            val nodeList = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = View.GONE
+                setPadding(dp(16), 0, dp(4), dp(6))
+            }
+            val arrow = smallBtn(ctx).apply {
+                text = "▸ 节点"
+                setOnClickListener {
+                    if (nodeList.visibility == View.GONE) {
+                        text = "▾ 节点"
+                        nodeList.visibility = View.VISIBLE
+                        if (nodeList.childCount == 0) {
+                            lifecycleScope.launch { populateNodeList(nodeList, s.id) }
+                        }
+                    } else {
+                        text = "▸ 节点"
+                        nodeList.visibility = View.GONE
+                    }
+                }
+            }
+            header.addView(name, LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
+            ))
+            header.addView(arrow)
+            scriptBox.addView(header)
+            scriptBox.addView(nodeList)
+            list.addView(scriptBox)
         }
         val newItem = TextView(ctx).apply {
             text = "+ 新建脚本"
@@ -1813,6 +1851,19 @@ class OverlayService : LifecycleService() {
             }
         }
         list.addView(newItem)
+        // 节点全展开后可能超出屏幕，套一层限高(屏高 60%)的滚动容器。
+        val scroller = object : ScrollView(ctx) {
+            override fun onMeasure(widthSpec: Int, heightSpec: Int) {
+                val maxH = (resources.displayMetrics.heightPixels * 0.6f).toInt()
+                super.onMeasure(
+                    widthSpec,
+                    MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST),
+                )
+            }
+        }.apply {
+            isVerticalScrollBarEnabled = true
+            addView(list)
+        }
         val loc = IntArray(2)
         anchor.getLocationOnScreen(loc)
         val pickerWidth = dp(200)
@@ -1835,14 +1886,74 @@ class OverlayService : LifecycleService() {
             }
             y = (loc[1] - gap).coerceAtLeast(gap)
         }
-        list.setOnTouchListener { _, e ->
+        scroller.setOnTouchListener { _, e ->
             if (e.action == MotionEvent.ACTION_OUTSIDE) {
                 scriptPickerOutsideDismissAt = SystemClock.uptimeMillis()
                 dismissScriptPicker(); true
             } else false
         }
-        wm.addView(list, params)
-        scriptPickerView = list
+        wm.addView(scroller, params)
+        scriptPickerView = scroller
+    }
+
+    /** 加载脚本节点并填进展开区：每条点一下就在真实屏幕闪烁该节点的位置。 */
+    private suspend fun populateNodeList(container: LinearLayout, scriptId: Long) {
+        val data = App.from(this).scriptRepo.load(scriptId) ?: return
+        val ctx = this
+        if (data.actions.isEmpty()) {
+            container.addView(TextView(ctx).apply {
+                text = "（无节点）"
+                setTextColor(Color.parseColor("#AAAAAA"))
+                textSize = 12f
+                setPadding(dp(8), dp(6), dp(8), dp(6))
+            })
+            return
+        }
+        data.actions.forEach { a ->
+            container.addView(TextView(ctx).apply {
+                text = nodeLabel(a)
+                setTextColor(Color.WHITE)
+                textSize = 12f
+                isSingleLine = true
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(dp(8), dp(6), dp(8), dp(6))
+                setOnClickListener {
+                    val marker = markerForAction(a)
+                    if (marker != null) {
+                        showFlashingPositionMarker(marker)
+                    } else {
+                        Toast.makeText(ctx, "该节点没有固定屏幕位置", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            })
+        }
+    }
+
+    private fun nodeLabel(a: Action): String {
+        val pos = when (a.type) {
+            ActionType.TAP, ActionType.LONG_PRESS -> "  (${a.startX.toInt()}, ${a.startY.toInt()})"
+            ActionType.SWIPE ->
+                "  (${a.startX.toInt()},${a.startY.toInt()})→(${a.endX.toInt()},${a.endY.toInt()})"
+            else -> ""
+        }
+        val label = a.alias?.takeIf { it.isNotBlank() } ?: typeLabel(a.type)
+        return "#${a.index + 1} $label$pos"
+    }
+
+    /** 把节点映射成屏幕高亮标记；无固定屏幕位置(等待/粘贴/回车等)返回 null。 */
+    private fun markerForAction(a: Action): ServiceBus.PositionMarker? = when (a.type) {
+        ActionType.TAP -> ServiceBus.PositionMarker.Point(a.startX, a.startY, "点击")
+        ActionType.LONG_PRESS -> ServiceBus.PositionMarker.Point(a.startX, a.startY, "长按")
+        ActionType.SWIPE ->
+            ServiceBus.PositionMarker.Swipe(a.startX, a.startY, a.endX, a.endY, "滑动")
+        else ->
+            // 仅当节点确实带矩形区域(end 大于 start)时才高亮区域。
+            if (a.endX > a.startX && a.endY > a.startY) {
+                ServiceBus.PositionMarker.Region(
+                    Rect(a.startX.toInt(), a.startY.toInt(), a.endX.toInt(), a.endY.toInt()),
+                    typeLabel(a.type),
+                )
+            } else null
     }
 
     private fun dismissScriptPicker() {
