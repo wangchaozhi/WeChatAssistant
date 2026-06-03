@@ -742,7 +742,7 @@ private val NODE_GROUPS: List<Pair<String, List<Pair<ActionType, String>>>> = li
     "找图 / AI" to listOf(
         ActionType.SCREENSHOT_AI to "AI 截图问答",
         ActionType.AI_TAP to "AI 找图点击",
-        ActionType.IMAGE_MATCH to "找图点击（模板）",
+        ActionType.IMAGE_MATCH to "选图点击",
     ),
     "快照 / 条件" to listOf(
         ActionType.SNAPSHOT to "快照（记基准）",

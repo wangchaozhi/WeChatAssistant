@@ -442,7 +442,7 @@ private fun AddActionMenu(
                 onClick = { onAddAi(); expanded = false },
             )
             DropdownMenuItem(
-                text = { Text("找图点击（模板）…") },
+                text = { Text("选图点击…") },
                 onClick = { onAddImageMatch(); expanded = false },
             )
         }
@@ -515,7 +515,7 @@ internal fun typeLabel(t: ActionType): String = when (t) {
     ActionType.WAIT -> "等待"
     ActionType.SCREENSHOT_AI -> "AI 截图问答"
     ActionType.AI_TAP -> "AI 找图点击"
-    ActionType.IMAGE_MATCH -> "找图点击（模板）"
+    ActionType.IMAGE_MATCH -> "选图点击"
     ActionType.PASTE -> "粘贴"
     ActionType.ENTER -> "回车"
     ActionType.WAIT_PAGE_CHANGE -> "等待页面变化"
