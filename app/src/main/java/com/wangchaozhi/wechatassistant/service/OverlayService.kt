@@ -2105,7 +2105,6 @@ class OverlayService : LifecycleService() {
                 Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
         }
         startActivity(intent)
-        Toast.makeText(this, "正在请求屏幕共享授权…", Toast.LENGTH_SHORT).show()
     }
 
     private fun overlayType(): Int =
