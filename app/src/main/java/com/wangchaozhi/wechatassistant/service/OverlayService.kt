@@ -83,6 +83,9 @@ class OverlayService : LifecycleService() {
     private val recordedTouches = mutableListOf<ServiceBus.RawTouch>()
     private val recordedPastes = mutableListOf<Long>()
     private val recordedEnters = mutableListOf<Long>()
+    // 录制时点的 AI：start=点击时刻，end=AI 返回结果的时刻(默认等于 start，结果回来时回填)。
+    // 用 end 作为这步的结束时间，下一步(如粘贴)的间隔才不会把 AI 识图耗时算进去。
+    private val recordedAi = mutableListOf<RecordedAiStep>()
     // 录制时截的模板：时间戳 + 模板图路径，停止录制时插进时间线变成 IMAGE_MATCH 步骤。
     private val recordedTemplates = mutableListOf<Pair<Long, String>>()
     private val recordedSnapshots = mutableListOf<RecordedSnapshot>()
@@ -141,7 +144,16 @@ class OverlayService : LifecycleService() {
         }
         lifecycleScope.launch {
             ServiceBus.lastAiResult.collect { res ->
-                if (res != null) panelView?.post { renderAiResult(res) }
+                if (res != null) {
+                    // 录制中：AI 结果到了，把这步的结束时间回填为现在，
+                    // 否则下一步会把 AI 识图耗时当成「执行前等待」记进去。
+                    if (recording) {
+                        recordedAi.lastOrNull()?.let { step ->
+                            if (step.end == step.start) step.end = recordTimestamp()
+                        }
+                    }
+                    panelView?.post { renderAiResult(res) }
+                }
             }
         }
         lifecycleScope.launch {
@@ -360,17 +372,27 @@ class OverlayService : LifecycleService() {
         val btnPlayStop = compactBtn(ctx, "▶") { togglePlayStop(selectBtn) }
         playStopBtn = btnPlayStop
         val btnAi = compactBtn(ctx, "AI") {
+            val prompt = App.from(ctx).settingsRepo.defaultPrompt
+            // 录制中先记一步（即使此刻截图服务没开，回放时再截图问答），与粘贴/回车一致。
+            // end 先等于 start，等 AI 结果回来时再回填(见 lastAiResult 收集器)。
+            if (recording) {
+                val ts = recordTimestamp()
+                recordedAi += RecordedAiStep(ts, prompt, ts)
+                refreshStatus()
+            }
             if (!ServiceBus.captureReady.value) {
                 Toast.makeText(ctx, "请先在主界面启动「截图服务」", Toast.LENGTH_LONG).show()
                 return@compactBtn
             }
-            val prompt = App.from(ctx).settingsRepo.defaultPrompt
             showBubbleLoading()
             ServiceBus.lastAiResult.value = null
             ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.TakeAndAsk(prompt))
         }
         val btnPaste = compactBtn(ctx, "粘贴") {
-            if (recording) recordedPastes += recordTimestamp()
+            if (recording) {
+                recordedPastes += recordTimestamp()
+                refreshStatus()
+            }
             if (!ServiceBus.accessibilityReady.value) {
                 Toast.makeText(ctx, "请先开启「无障碍」服务", Toast.LENGTH_LONG).show()
                 return@compactBtn
@@ -378,7 +400,10 @@ class OverlayService : LifecycleService() {
             ServiceBus.pasteCmd.tryEmit(Unit)
         }
         val btnEnter = compactBtn(ctx, "回车") {
-            if (recording) recordedEnters += recordTimestamp()
+            if (recording) {
+                recordedEnters += recordTimestamp()
+                refreshStatus()
+            }
             if (!ServiceBus.accessibilityReady.value) {
                 Toast.makeText(ctx, "请先开启「无障碍」服务", Toast.LENGTH_LONG).show()
                 return@compactBtn
@@ -671,6 +696,8 @@ class OverlayService : LifecycleService() {
     }
 
     private fun showRecordResult(scriptId: Long, scriptName: String) {
+        // 记下录制前选中的脚本，删掉刚录的脚本时好恢复回去。
+        val prevSelectedId = selectedScriptId
         // 录完即设为已选(并持久化)，按「▶」可直接回放，无需再「选」。
         setSelectedScript(scriptId, scriptName)
         bubbleHandler.removeCallbacks(hideBubble)
@@ -687,6 +714,15 @@ class OverlayService : LifecycleService() {
             setOnClickListener {
                 lifecycleScope.launch {
                     App.from(this@OverlayService).scriptRepo.delete(scriptId)
+                    // 恢复到录制前选中的脚本；它要是也被删了/不存在就清空选中。
+                    val prev = prevSelectedId
+                        ?.takeIf { it != scriptId }
+                        ?.let { App.from(this@OverlayService).scriptRepo.load(it) }
+                    if (prev != null) {
+                        setSelectedScript(prev.script.id, prev.script.name)
+                    } else {
+                        clearSelectedScript()
+                    }
                 }
                 hideBubbleNow()
             }
@@ -837,6 +873,7 @@ class OverlayService : LifecycleService() {
             recordedTouches.clear()
             recordedPastes.clear()
             recordedEnters.clear()
+            recordedAi.clear()
             recordedTemplates.clear()
             recordedSnapshots.clear()
             btn.text = "完成"
@@ -879,6 +916,7 @@ class OverlayService : LifecycleService() {
             recordedTouches.clear()
             recordedPastes.clear()
             recordedEnters.clear()
+            recordedAi.clear()
             recordedTemplates.clear()
             recordedSnapshots.clear()
             btn.text = "完成"
@@ -981,7 +1019,8 @@ class OverlayService : LifecycleService() {
         statusScriptLabel?.visibility = View.GONE
         if (recording) {
             val captured = recordedTouches.size + recordedPastes.size +
-                recordedEnters.size + recordedTemplates.size + recordedSnapshots.size
+                recordedEnters.size + recordedAi.size +
+                recordedTemplates.size + recordedSnapshots.size
             statusLabel?.text = "录制中 · $captured 步"
             return
         }
@@ -1614,18 +1653,22 @@ class OverlayService : LifecycleService() {
         val touches = recordedTouches.toList()
         val pastes = recordedPastes.toList()
         val enters = recordedEnters.toList()
+        val ais = recordedAi.toList()
         val templates = recordedTemplates.toList()
         val snapshots = recordedSnapshots.toList()
         recordedTouches.clear()
         recordedPastes.clear()
         recordedEnters.clear()
+        recordedAi.clear()
         recordedTemplates.clear()
         recordedSnapshots.clear()
-        if (touches.isEmpty() && pastes.isEmpty() && enters.isEmpty() && templates.isEmpty() && snapshots.isEmpty()) return
+        if (touches.isEmpty() && pastes.isEmpty() && enters.isEmpty() &&
+            ais.isEmpty() && templates.isEmpty() && snapshots.isEmpty()) return
         val events: List<RecordedEvent> =
             touches.map { RecordedEvent.Touch(it) } +
                 pastes.map { RecordedEvent.Paste(it) } +
                 enters.map { RecordedEvent.Enter(it) } +
+                ais.map { RecordedEvent.Ai(it.start, it.end, it.prompt) } +
                 templates.map { RecordedEvent.ImageMatch(it.first, it.second) } +
                 snapshots.map { RecordedEvent.Snapshot(it.timestamp, it.name, it.region) }
         val sorted = events.sortedBy { it.timestamp }
@@ -1663,6 +1706,16 @@ class OverlayService : LifecycleService() {
                     startY = 0f,
                     durationMs = 0L,
                     delayBeforeMs = delay,
+                )
+                is RecordedEvent.Ai -> Action(
+                    scriptId = 0,
+                    index = i,
+                    type = ActionType.SCREENSHOT_AI,
+                    startX = 0f,
+                    startY = 0f,
+                    durationMs = 0L,
+                    delayBeforeMs = delay,
+                    aiPrompt = ev.prompt,
                 )
                 is RecordedEvent.Enter -> Action(
                     scriptId = 0,
@@ -1731,6 +1784,11 @@ class OverlayService : LifecycleService() {
         data class Enter(override val timestamp: Long) : RecordedEvent {
             override val endTimestamp: Long get() = timestamp
         }
+        data class Ai(
+            override val timestamp: Long,
+            override val endTimestamp: Long,
+            val prompt: String,
+        ) : RecordedEvent
         data class ImageMatch(override val timestamp: Long, val templatePath: String) : RecordedEvent {
             override val endTimestamp: Long get() = timestamp
         }
@@ -1743,6 +1801,8 @@ class OverlayService : LifecycleService() {
         }
     }
 
+    private data class RecordedAiStep(val start: Long, val prompt: String, var end: Long)
+
     private data class RecordedSnapshot(
         val timestamp: Long,
         val name: String,
@@ -1754,6 +1814,14 @@ class OverlayService : LifecycleService() {
         selectedScriptId = id
         selectedScriptName = name
         App.from(this).settingsRepo.selectedScriptId = id
+        refreshStatus()
+    }
+
+    /** 清空所选脚本：内存与持久化都清掉，面板回到「连点」。 */
+    private fun clearSelectedScript() {
+        selectedScriptId = null
+        selectedScriptName = null
+        App.from(this).settingsRepo.selectedScriptId = -1L
         refreshStatus()
     }
 
@@ -1832,10 +1900,19 @@ class OverlayService : LifecycleService() {
                     }
                 }
             }
+            // 「✎」直接打开该脚本的编辑页（不必先选中再编辑）。
+            val edit = smallBtn(ctx).apply {
+                text = "✎"
+                setOnClickListener {
+                    dismissScriptPicker()
+                    launchHome(s.id)
+                }
+            }
             header.addView(name, LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
             ))
             header.addView(arrow)
+            header.addView(edit)
             scriptBox.addView(header)
             scriptBox.addView(nodeList)
             list.addView(scriptBox)
