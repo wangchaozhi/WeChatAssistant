@@ -823,6 +823,11 @@ private fun DebugLogCard() {
         DebugImagesDialog(
             images = debugImages,
             onRefresh = { debugImages = app.debugBitmapFiles() },
+            onClear = {
+                val n = app.clearDebugBitmaps()
+                debugImages = app.debugBitmapFiles()
+                Toast.makeText(context, "已清理 $n 张调试图片", Toast.LENGTH_SHORT).show()
+            },
             onDismiss = { showImages = false },
         )
     }
@@ -832,6 +837,7 @@ private fun DebugLogCard() {
 private fun DebugImagesDialog(
     images: List<File>,
     onRefresh: () -> Unit,
+    onClear: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -864,7 +870,13 @@ private fun DebugImagesDialog(
             Button(onClick = onDismiss) { Text("关闭") }
         },
         dismissButton = {
-            TextButton(onClick = onRefresh) { Text("刷新") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onRefresh) { Text("刷新") }
+                TextButton(
+                    onClick = onClear,
+                    enabled = images.isNotEmpty(),
+                ) { Text("一键清理") }
+            }
         },
     )
 }

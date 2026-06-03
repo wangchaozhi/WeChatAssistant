@@ -65,6 +65,7 @@ class OverlayService : LifecycleService() {
     private var statusScriptLabel: TextView? = null
     private var playStopBtn: Button? = null
     private var selectBtn: Button? = null
+    private var shareBtn: Button? = null
     private var liveRegionPickBtn: Button? = null
     // 已选脚本：「选」按钮设定，「▶」按钮据此直接播放，再次播放无需重选。
     private var selectedScriptId: Long? = null
@@ -130,6 +131,13 @@ class OverlayService : LifecycleService() {
         }
         lifecycleScope.launch {
             ServiceBus.playerState.collect { refreshStatus() }
+        }
+        lifecycleScope.launch {
+            ServiceBus.captureReady.collect { ready ->
+                shareBtn?.post {
+                    shareBtn?.setTextColor(if (ready) Color.parseColor("#7CFFB0") else Color.WHITE)
+                }
+            }
         }
         lifecycleScope.launch {
             ServiceBus.overlayHidden.collect { hidden ->
@@ -590,11 +598,16 @@ class OverlayService : LifecycleService() {
         attachCollapsedDrag(edit) { editSelectedScript(select) }
         val handle = compactBtn(ctx, "‹") { }
         attachCollapsedDrag(handle) { expandPanel() }
+        // 屏幕共享：放在收起工具条最下面，用图标；就绪时变绿。
+        val share = compactBtn(ctx, "▣") { }
+        shareBtn = share
+        attachCollapsedDrag(share) { requestScreenShare() }
         attachCollapsedDrag(bar) { expandPanel() }
         bar.addView(play)
         bar.addView(edit)
         bar.addView(select)
         bar.addView(handle)
+        bar.addView(share)
         return bar
     }
 
@@ -1206,11 +1219,30 @@ class OverlayService : LifecycleService() {
             hintText = "在真实页面上拖动框选快照范围，然后点「确定」",
             tooSmallText = "框选区域太小",
         ) { rect ->
-            val name = "快照${recordedSnapshots.size + 1}"
-            recordedSnapshots += RecordedSnapshot(recordTimestamp(), name, rect)
-            refreshStatus()
-            Toast.makeText(this, "已记录快照范围：$name", Toast.LENGTH_SHORT).show()
+            // 录制时就把框选区域截下来存盘，作为该快照的固定基准图(回放时直接用，不再实时重截)。
+            panelView?.visibility = View.INVISIBLE
             removeCropOverlay()
+            lifecycleScope.launch {
+                kotlinx.coroutines.delay(160)
+                val bmp = captureScreenBitmap()
+                panelView?.visibility = View.VISIBLE
+                val cropped = bmp?.let { cropBitmapByScreenRect(it, rect) }
+                if (cropped == null) {
+                    Toast.makeText(this@OverlayService, "截图失败或框选区域太小", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val path = com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
+                    .saveTemplate(this@OverlayService, cropped)
+                cropped.recycle()
+                val name = "快照${recordedSnapshots.size + 1}"
+                recordedSnapshots += RecordedSnapshot(recordTimestamp(), name, rect, path)
+                refreshStatus()
+                Toast.makeText(
+                    this@OverlayService,
+                    if (path != null) "已记录快照：$name" else "已记录快照范围：$name(截图失败，回放时改为实时截基准)",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
         }
     }
 
@@ -1355,6 +1387,9 @@ class OverlayService : LifecycleService() {
                 Toast.makeText(ctx, "框选区域太小", Toast.LENGTH_SHORT).show()
                 return@compactBtn
             }
+            // 存下裁剪图作为该快照的基准图，回放时直接用。
+            val previewPath = com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
+                .saveTemplate(ctx, preview)
             preview.recycle()
             val crop = cropView.cropRect()
             val dm = resources.displayMetrics
@@ -1371,7 +1406,7 @@ class OverlayService : LifecycleService() {
                 return@compactBtn
             }
             val name = "快照${recordedSnapshots.size + 1}"
-            recordedSnapshots += RecordedSnapshot(recordTimestamp(), name, rect)
+            recordedSnapshots += RecordedSnapshot(recordTimestamp(), name, rect, previewPath)
             refreshStatus()
             Toast.makeText(ctx, "已记录快照范围：$name", Toast.LENGTH_SHORT).show()
             removeCropOverlay()
@@ -1670,12 +1705,11 @@ class OverlayService : LifecycleService() {
                 enters.map { RecordedEvent.Enter(it) } +
                 ais.map { RecordedEvent.Ai(it.start, it.end, it.prompt) } +
                 templates.map { RecordedEvent.ImageMatch(it.first, it.second) } +
-                snapshots.map { RecordedEvent.Snapshot(it.timestamp, it.name, it.region) }
+                snapshots.map { RecordedEvent.Snapshot(it.timestamp, it.name, it.region, it.previewPath) }
         val sorted = events.sortedBy { it.timestamp }
-        val firstTs = sorted.first().timestamp
         val actions = sorted.mapIndexed { i, ev ->
-            val prevEnd = if (i == 0) firstTs else sorted[i - 1].endTimestamp
-            val delay = (ev.timestamp - prevEnd).coerceAtLeast(0)
+            // 不再用录制时实测的步间隔，所有节点的「执行前等待」统一默认 500ms（手势时长仍按录制）。
+            val delay = DEFAULT_STEP_DELAY_MS
             when (ev) {
                 is RecordedEvent.Touch -> {
                     val t = ev.raw
@@ -1747,6 +1781,8 @@ class OverlayService : LifecycleService() {
                     durationMs = 0L,
                     delayBeforeMs = delay,
                     aiPrompt = ev.name,
+                    // 录制时存下的基准图路径；回放时 SNAPSHOT 直接用它，不再实时重截。
+                    templatePath = ev.previewPath,
                 )
             }
         }
@@ -1796,6 +1832,7 @@ class OverlayService : LifecycleService() {
             override val timestamp: Long,
             val name: String,
             val region: android.graphics.Rect,
+            val previewPath: String?,
         ) : RecordedEvent {
             override val endTimestamp: Long get() = timestamp
         }
@@ -1807,6 +1844,7 @@ class OverlayService : LifecycleService() {
         val timestamp: Long,
         val name: String,
         val region: android.graphics.Rect,
+        val previewPath: String?,
     )
 
     /** 记录所选脚本：更新内存状态、持久化 id、刷新面板标签。 */
@@ -2051,6 +2089,20 @@ class OverlayService : LifecycleService() {
         startActivity(intent)
     }
 
+    /** 请求屏幕共享：已就绪则提示；否则拉起主界面，由它弹 MediaProjection 授权框。 */
+    private fun requestScreenShare() {
+        if (ServiceBus.captureReady.value) {
+            Toast.makeText(this, "屏幕共享已就绪", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(MainActivity.EXTRA_REQUEST_CAPTURE, true)
+        }
+        startActivity(intent)
+        Toast.makeText(this, "正在请求屏幕共享授权…", Toast.LENGTH_SHORT).show()
+    }
+
     private fun overlayType(): Int =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -2100,6 +2152,8 @@ class OverlayService : LifecycleService() {
         private const val INJECT_EXTRA_TIMEOUT_MS = 1_500L
         // 注入后留给真实 App 完成跳转/动画的安定时间，再恢复采集。
         private const val INJECT_SETTLE_MS = 120L
+        // 录制生成脚本时，每个节点「执行前等待」统一用这个默认值，不再按录制实测的步间隔。
+        private const val DEFAULT_STEP_DELAY_MS = 500L
         fun start(ctx: Context) {
             ctx.startForegroundService(Intent(ctx, OverlayService::class.java))
         }

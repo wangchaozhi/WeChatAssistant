@@ -182,9 +182,14 @@ class MainActivity : ComponentActivity() {
     private fun handleLaunchIntent(intent: Intent?) {
         val id = intent?.getLongExtra(EXTRA_EDIT_SCRIPT_ID, -1L) ?: -1L
         val createNew = intent?.getBooleanExtra(EXTRA_NEW_SCRIPT, false) == true
+        val requestCapture = intent?.getBooleanExtra(EXTRA_REQUEST_CAPTURE, false) == true
         when {
             id > 0 -> viewModel.navigate(Screen.Editor(id))
             createNew -> viewModel.navigate(Screen.Editor(null))
+        }
+        // 悬浮窗「共享」按钮拉起本界面时，自动弹屏幕共享授权框（Service 不能直接申请）。
+        if (requestCapture && !ServiceBus.captureReady.value) {
+            requestMediaProjection()
         }
     }
 
@@ -216,6 +221,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_EDIT_SCRIPT_ID = "extra_edit_script_id"
         const val EXTRA_NEW_SCRIPT = "extra_new_script"
+        const val EXTRA_REQUEST_CAPTURE = "extra_request_capture"
     }
 }
 

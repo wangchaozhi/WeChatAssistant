@@ -82,6 +82,10 @@ class App : Application() {
                 .orEmpty()
         }.getOrDefault(emptyList())
 
+    /** 删除所有调试图片(dbg_*.png)，返回删掉的张数。 */
+    fun clearDebugBitmaps(): Int =
+        runCatching { debugBitmapFiles().count { it.delete() } }.getOrDefault(0)
+
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)

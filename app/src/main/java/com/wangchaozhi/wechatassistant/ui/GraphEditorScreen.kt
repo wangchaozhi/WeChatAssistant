@@ -1,6 +1,8 @@
 package com.wangchaozhi.wechatassistant.ui
 
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -12,6 +14,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import java.io.File
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -636,11 +641,26 @@ private fun NodeCard(
             }
             if (node.type == ActionType.SNAPSHOT) {
                 val region = node.endX > node.startX && node.endY > node.startY
+                val snapPath = node.templatePath?.ifBlank { null }
+                val snapBmp = remember(snapPath) {
+                    snapPath?.let { p ->
+                        runCatching { if (File(p).exists()) BitmapFactory.decodeFile(p) else null }.getOrNull()
+                    }
+                }
                 Text(
-                    "「${node.aiPrompt?.ifBlank { null } ?: "默认"}」" + if (region) " ▣范围" else "",
+                    "「${node.aiPrompt?.ifBlank { null } ?: "默认"}」" +
+                        if (snapBmp != null) " ▣基准图" else if (region) " ▣范围" else "",
                     color = Color(0xCCFFFFFF),
                     style = MaterialTheme.typography.labelSmall,
                 )
+                if (snapBmp != null) {
+                    Image(
+                        bitmap = snapBmp.asImageBitmap(),
+                        contentDescription = "快照基准图",
+                        modifier = Modifier.height(22.dp),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
             }
             if (node.type == ActionType.IF_PAGE_CHANGED) {
                 val a = node.aiPrompt?.ifBlank { null } ?: "默认"

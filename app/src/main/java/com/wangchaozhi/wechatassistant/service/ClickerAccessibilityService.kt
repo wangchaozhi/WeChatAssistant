@@ -40,6 +40,10 @@ class ClickerAccessibilityService : AccessibilityService() {
     private companion object {
         // 图遍历硬上限，防止无条件节点把关的环导致死循环。
         const val MAX_GRAPH_STEPS = 100_000
+        // IF_PAGE_CHANGED(流式)判定「页面已稳定」的门槛：连续两帧相关度高于此值算静止。
+        const val PAGE_SETTLE_SIM = 0.97
+        // 需要连续静止的帧数，过滤掉刷新过程中偶发的一帧暂停，避免在加载中途就下结论。
+        const val PAGE_SETTLE_FRAMES = 2
     }
 
     override fun onServiceConnected() {
@@ -308,19 +312,27 @@ class ClickerAccessibilityService : AccessibilityService() {
                 ActionType.SNAPSHOT -> {
                     val key = node.aiPrompt?.ifBlank { null } ?: "默认"
                     val region = regionOf(node)
-                    // 截图就绪时存截图做 OpenCV 比较；region=null 表示整屏。
-                    val bmp = if (ServiceBus.captureReady.value) regionCrop(region) else null
+                    // 优先用录制时存下的基准图(templatePath)，回放不必实时重截、确定且更快；
+                    // 没有存图(老脚本/截图失败)才退回截当前页。region=null 表示整屏。
+                    val savedPath = node.templatePath?.ifBlank { null }
+                    val savedBmp = savedPath?.let {
+                        runCatching { android.graphics.BitmapFactory.decodeFile(it) }.getOrNull()
+                    }
+                    val bmp = savedBmp
+                        ?: if (ServiceBus.captureReady.value) regionCrop(region) else null
                     if (bmp != null) {
                         regionBmps.remove(key)?.recycle()
                         regionBmps[key] = bmp
                         // 调试：把区域图存盘，便于 adb 拉出来肉眼对比。
                         saveDebugBitmap("dbg_snap_$key.png", bmp)
-                        App.from(this@ClickerAccessibilityService)
-                            .appendLog("SNAPSHOT[$key]=img ${bmp.width}x${bmp.height} region=$region")
+                        App.from(this@ClickerAccessibilityService).appendLog(
+                            "SNAPSHOT[$key]=img ${bmp.width}x${bmp.height} region=$region " +
+                                "src=${if (savedBmp != null) "存图" else "实时"}"
+                        )
                     } else {
                         regionBmps.remove(key)?.recycle()
                         App.from(this@ClickerAccessibilityService)
-                            .appendLog("SNAPSHOT[$key] 失败：截图服务未就绪或截图超时 region=$region")
+                            .appendLog("SNAPSHOT[$key] 失败：无存图且截图服务未就绪/超时 region=$region")
                     }
                     0
                 }
@@ -334,11 +346,35 @@ class ClickerAccessibilityService : AccessibilityService() {
                     if (changed) 0 else 1
                 }
                 ActionType.IF_IMAGE_EXISTS -> {
+                    // 快照式对比：把存下的图(templatePath)和当前页「对应区域」裁出来直接比相关度，
+                    // 不再全屏 matchTemplate 搜。region 为空(老节点没存位置)才退回全屏找图。
                     val path = node.templatePath?.ifBlank { null }
-                    val found = path != null && App.from(this@ClickerAccessibilityService)
-                        .templateMatch.locate(path, node.matchThreshold).isSuccess
-                    App.from(this@ClickerAccessibilityService)
-                        .appendLog("IF_IMAGE_EXISTS thr=${node.matchThreshold} found=$found")
+                    val region = regionOf(node)
+                    val seq = ++debugImageSeq
+                    val found: Boolean
+                    if (path != null && region != null) {
+                        val ref = withContext(Dispatchers.IO) {
+                            runCatching { android.graphics.BitmapFactory.decodeFile(path) }.getOrNull()
+                        }
+                        val now = if (ServiceBus.captureReady.value) regionCrop(region) else null
+                        val match = if (ref != null && now != null) RegionDiff.compare(ref, now) else null
+                        val score = match?.score ?: -1.0
+                        found = match != null && score >= node.matchThreshold
+                        if (ref != null) saveDebugBitmap("dbg_imgexists_${seq}_ref.png", ref)
+                        if (now != null) saveDebugBitmap("dbg_imgexists_${seq}_now.png", now)
+                        ref?.recycle(); now?.recycle()
+                        App.from(this@ClickerAccessibilityService).appendLog(
+                            "IF_IMAGE_EXISTS(快照对比) thr=${node.matchThreshold} " +
+                                "score=${"%.3f".format(score)} found=$found region=$region " +
+                                "dbg=dbg_imgexists_${seq}_now.png"
+                        )
+                    } else {
+                        val dbg = "dbg_imgexists_$seq"
+                        found = path != null && App.from(this@ClickerAccessibilityService)
+                            .templateMatch.locate(path, node.matchThreshold, null, dbg).isSuccess
+                        App.from(this@ClickerAccessibilityService)
+                            .appendLog("IF_IMAGE_EXISTS(全屏找图) thr=${node.matchThreshold} found=$found dbg=$dbg.png")
+                    }
                     if (found) 0 else 1
                 }
                 ActionType.IF_TEXT_EXISTS -> {
@@ -457,25 +493,49 @@ class ClickerAccessibilityService : AccessibilityService() {
         // 幂等开流：已在流式则 startFrameStream 直接返回，连续 IF 复用同一路流。
         // 此处不 StopStream——由 runGraph 统一收尾，省掉每个节点的重复预热。
         ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.StartStream)
+        // 关键：不再「看到一帧和基准不同就立刻判定变了」——刷新/加载过程中的中间帧也与基准不同，
+        // 那样会在页面还没稳定时就放行，下游固定坐标点击会落到未就绪的界面上(误点)。
+        // 改为「先等画面稳定(连续帧之间几乎不动)，稳定后再判断是否和基准不同」：刷新中的抖动帧一律跳过。
         return withTimeoutOrNull(timeoutMs) {
             var lastId = -1L
-            ServiceBus.streamFrame.first { frame ->
-                if (frame == null || frame.id == lastId) return@first false
-                lastId = frame.id
-                attempt += 1
-                val now = cropBitmap(frame.bitmap, region)
-                val match = if (now != null) RegionDiff.compare(baseline, now) else null
-                now?.recycle()
-                val changed = match != null && match.score < threshold
-                App.from(this@ClickerAccessibilityService).appendLog(
-                    "IF OpenCV vs 快照[$keyA](stream) attempt=$attempt " +
-                        "sim=${"%.3f".format(match?.score ?: -1.0)} " +
-                        "shift=(${match?.offsetX ?: 0},${match?.offsetY ?: 0}) " +
-                        "thr=$threshold changed=$changed"
-                )
-                changed
+            var prev: android.graphics.Bitmap? = null
+            var stableStreak = 0
+            try {
+                ServiceBus.streamFrame.first { frame ->
+                    if (frame == null || frame.id == lastId) return@first false
+                    lastId = frame.id
+                    attempt += 1
+                    val now = cropBitmap(frame.bitmap, region) ?: return@first false
+                    // 与上一帧比：相关度高=画面静止；用它判断页面是否还在刷新/动。
+                    val prevBmp = prev
+                    val stableScore = if (prevBmp != null)
+                        RegionDiff.compare(prevBmp, now)?.score ?: -1.0 else -1.0
+                    prevBmp?.recycle()
+                    prev = now
+                    val settled = prevBmp != null && stableScore >= PAGE_SETTLE_SIM
+                    stableStreak = if (settled) stableStreak + 1 else 0
+                    if (stableStreak < PAGE_SETTLE_FRAMES) {
+                        App.from(this@ClickerAccessibilityService).appendLog(
+                            "IF 快照[$keyA](stream) attempt=$attempt 等画面稳定 " +
+                                "stableSim=${"%.3f".format(stableScore)} streak=$stableStreak"
+                        )
+                        return@first false
+                    }
+                    // 画面已稳定，再和基准比，决定是否真的变了。
+                    val match = RegionDiff.compare(baseline, now)
+                    val changed = match != null && match.score < threshold
+                    App.from(this@ClickerAccessibilityService).appendLog(
+                        "IF OpenCV vs 快照[$keyA](stream,settled) attempt=$attempt " +
+                            "sim=${"%.3f".format(match?.score ?: -1.0)} " +
+                            "shift=(${match?.offsetX ?: 0},${match?.offsetY ?: 0}) " +
+                            "thr=$threshold changed=$changed"
+                    )
+                    changed
+                }
+                true
+            } finally {
+                prev?.recycle()
             }
-            true
         } ?: false
     }
 
@@ -581,7 +641,7 @@ class ClickerAccessibilityService : AccessibilityService() {
             ActionType.IMAGE_MATCH -> {
                 val path = action.templatePath ?: return
                 val match = App.from(this@ClickerAccessibilityService)
-                    .templateMatch.locate(path, action.matchThreshold)
+                    .templateMatch.locate(path, action.matchThreshold, regionOf(action))
                     .getOrNull() ?: return
                 performGesture(
                     action.copy(
