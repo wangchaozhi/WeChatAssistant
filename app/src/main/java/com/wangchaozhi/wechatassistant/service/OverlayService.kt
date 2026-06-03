@@ -410,9 +410,9 @@ class OverlayService : LifecycleService() {
             }
             ServiceBus.enterCmd.tryEmit(Unit)
         }
-        val btnTemplate = compactBtn(ctx, "模板") {
+        val btnTemplate = compactBtn(ctx, "选图点击") {
             if (!recording) {
-                Toast.makeText(ctx, "请先开始录制，再截模板", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, "请先开始录制，再选图点击", Toast.LENGTH_SHORT).show()
                 return@compactBtn
             }
             if (!ServiceBus.captureReady.value) {
