@@ -31,6 +31,15 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ui.CaptureRequestActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
         <service
             android:name=".service.ClickerAccessibilityService"
             android:label="@string/accessibility_label"

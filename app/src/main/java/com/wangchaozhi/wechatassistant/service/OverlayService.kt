@@ -45,6 +45,7 @@ import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
+import com.wangchaozhi.wechatassistant.ui.CaptureRequestActivity
 import com.wangchaozhi.wechatassistant.ui.MainActivity
 import com.wangchaozhi.wechatassistant.ui.typeLabel
 import com.wangchaozhi.wechatassistant.util.WifiAdbManager
@@ -2089,15 +2090,19 @@ class OverlayService : LifecycleService() {
         startActivity(intent)
     }
 
-    /** 请求屏幕共享：已就绪则提示；否则拉起主界面，由它弹 MediaProjection 授权框。 */
+    /**
+     * 请求屏幕共享：已就绪则提示；否则启动无界面的中转 Activity 弹 MediaProjection 授权框。
+     * 授权弹窗盖在当前 App 上，授权后直接回到原处，不会跳回本应用主界面。
+     */
     private fun requestScreenShare() {
         if (ServiceBus.captureReady.value) {
             Toast.makeText(this, "屏幕共享已就绪", Toast.LENGTH_SHORT).show()
             return
         }
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra(MainActivity.EXTRA_REQUEST_CAPTURE, true)
+        val intent = Intent(this, CaptureRequestActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
         }
         startActivity(intent)
         Toast.makeText(this, "正在请求屏幕共享授权…", Toast.LENGTH_SHORT).show()
