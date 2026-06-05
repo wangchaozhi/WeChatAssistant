@@ -132,7 +132,11 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         registerNotificationChannels()
-        runCatching { WifiAdbManager.install(this, settingsRepo) }
+        // settingsRepo 首次访问会创建 EncryptedSharedPreferences（Keystore + 磁盘 I/O，开销较大），
+        // WifiAdbManager.install 还会顺带做一次 ADB 自动重连，放到后台线程避免阻塞应用启动。
+        Thread {
+            runCatching { WifiAdbManager.install(this, settingsRepo) }
+        }.start()
     }
 
     private fun registerNotificationChannels() {
