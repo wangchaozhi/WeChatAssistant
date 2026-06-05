@@ -42,6 +42,8 @@ class ClickerAccessibilityService : AccessibilityService() {
     private companion object {
         // 图遍历硬上限，防止无条件节点把关的环导致死循环。
         const val MAX_GRAPH_STEPS = 100_000
+        // CALL_SCRIPT 嵌套调用的最大深度，防止脚本互相调用形成过深/环状链。
+        const val MAX_CALL_DEPTH = 16
         // IF_IMAGE_EXISTS 等稳定(awaitRegionSettled)判定「页面已稳定」的门槛：连续多帧相关度高于此值算静止。
         const val PAGE_SETTLE_SIM = 0.995
         // 需要连续静止的帧数，过滤掉刷新过程中偶发的一帧暂停，避免在加载中途就下结论。
@@ -63,6 +65,16 @@ class ClickerAccessibilityService : AccessibilityService() {
                 when (cmd) {
                     is ServiceBus.PlayerCmd.Play -> startPlay(cmd.scriptId)
                     ServiceBus.PlayerCmd.Stop -> stopPlay()
+                }
+            }
+        }
+        scope.launch {
+            // 触发器(通知/定时)的播放请求：StateFlow 会把冷启动前设好的「待播放」值重放给刚连接的服务。
+            // 消费后置回 null，避免重复播放，也便于同一脚本下次再触发能再次生效。
+            ServiceBus.pendingPlay.collect { id ->
+                if (id != null) {
+                    ServiceBus.pendingPlay.value = null
+                    startPlay(id)
                 }
             }
         }
@@ -276,6 +288,8 @@ class ClickerAccessibilityService : AccessibilityService() {
         ai: ScreenshotAiUseCase,
         tap: AiTapUseCase,
         scriptId: Long,
+        // 当前调用栈上的脚本 id 集合，用于阻断 CALL_SCRIPT 的递归自调用。根脚本预置在内。
+        callStack: MutableSet<Long> = mutableSetOf(scriptId),
     ) {
         val script = data.script
         val nodes = data.actions.associateBy { it.id }
@@ -373,6 +387,34 @@ class ClickerAccessibilityService : AccessibilityService() {
                 ActionType.STOP -> {
                     App.from(this@ClickerAccessibilityService).appendLog("STOP 节点：终止整图执行")
                     break@run
+                }
+                ActionType.CALL_SCRIPT -> {
+                    val app = App.from(this@ClickerAccessibilityService)
+                    val targetId = node.callScriptId
+                    when {
+                        targetId == null ->
+                            app.appendLog("CALL_SCRIPT skipped: 未设置目标脚本 id=${node.id}")
+                        targetId in callStack ->
+                            app.appendLog("CALL_SCRIPT skipped: 检测到递归调用 target=$targetId")
+                        callStack.size >= MAX_CALL_DEPTH ->
+                            app.appendLog("CALL_SCRIPT skipped: 调用深度超上限($MAX_CALL_DEPTH) target=$targetId")
+                        else -> {
+                            val sub = app.scriptRepo.loadGraph(targetId)
+                            if (sub == null || sub.actions.isEmpty()) {
+                                app.appendLog("CALL_SCRIPT skipped: 目标脚本为空/不存在 target=$targetId")
+                            } else {
+                                app.appendLog("CALL_SCRIPT enter target=$targetId name=${sub.script.name}")
+                                callStack.add(targetId)
+                                try {
+                                    runGraph(sub, ai, tap, targetId, callStack)
+                                } finally {
+                                    callStack.remove(targetId)
+                                }
+                                app.appendLog("CALL_SCRIPT return target=$targetId")
+                            }
+                        }
+                    }
+                    0
                 }
                 else -> {
                     execute(node, ai, tap, scriptId, script.speed)
@@ -642,7 +684,8 @@ class ClickerAccessibilityService : AccessibilityService() {
             ActionType.START,
             ActionType.IF_IMAGE_EXISTS,
             ActionType.LOOP,
-            ActionType.STOP -> Unit
+            ActionType.STOP,
+            ActionType.CALL_SCRIPT -> Unit
         }
     }
 

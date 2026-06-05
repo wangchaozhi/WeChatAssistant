@@ -9,6 +9,7 @@ import com.wangchaozhi.wechatassistant.data.db.AppDatabase
 import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.data.repo.ScriptRepository
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
+import com.wangchaozhi.wechatassistant.data.repo.TriggerRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiTapUseCase
 import com.wangchaozhi.wechatassistant.feature.ai.AiReasoningEffort
 import com.wangchaozhi.wechatassistant.feature.ai.ModelScopeRepository
@@ -36,12 +37,16 @@ class App : Application() {
                 AppDatabase.MIGRATION_7_8,
                 AppDatabase.MIGRATION_8_9,
                 AppDatabase.MIGRATION_10_11,
+                AppDatabase.MIGRATION_11_12,
+                AppDatabase.MIGRATION_12_13,
             )
             .fallbackToDestructiveMigration()
             .build()
     }
 
     val scriptRepo: ScriptRepository by lazy { ScriptRepository(database.scriptDao()) }
+
+    val triggerRepo: TriggerRepository by lazy { TriggerRepository(database.triggerDao()) }
 
     val aiAnswerRepo: AiAnswerRepository by lazy {
         AiAnswerRepository(this, database.aiAnswerDao())
@@ -137,6 +142,12 @@ class App : Application() {
         // WifiAdbManager.install 还会顺带做一次 ADB 自动重连，放到后台线程避免阻塞应用启动。
         Thread {
             runCatching { WifiAdbManager.install(this, settingsRepo) }
+            // 进程启动后，把已启用的「定时触发」重新登记到 AlarmManager（重启/被杀后闹钟会丢失）。
+            runCatching {
+                kotlinx.coroutines.runBlocking {
+                    com.wangchaozhi.wechatassistant.trigger.ScheduleTriggers.rescheduleAll(this@App)
+                }
+            }
         }.start()
     }
 
@@ -163,12 +174,20 @@ class App : Application() {
                 NotificationManager.IMPORTANCE_DEFAULT,
             )
         )
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_TRIGGER,
+                getString(R.string.channel_trigger_name),
+                NotificationManager.IMPORTANCE_DEFAULT,
+            )
+        )
     }
 
     companion object {
         const val CHANNEL_CAPTURE = "ch_capture"
         const val CHANNEL_OVERLAY = "ch_overlay"
         const val CHANNEL_ADB = "ch_adb"
+        const val CHANNEL_TRIGGER = "ch_trigger"
 
         fun from(ctx: Context): App = ctx.applicationContext as App
     }

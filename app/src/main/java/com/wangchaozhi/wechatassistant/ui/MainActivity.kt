@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -142,6 +143,7 @@ class MainActivity : ComponentActivity() {
                         Screen.Home -> MainScreen(
                             viewModel = viewModel,
                             onOpenEditor = { id -> viewModel.navigate(Screen.Editor(id)) },
+                            onOpenTriggers = { id -> viewModel.navigate(Screen.Triggers(id)) },
                             onOpenHistory = { viewModel.navigate(Screen.History) },
                             onOpenSettings = { viewModel.navigate(Screen.Settings) },
                             onCreateScript = {
@@ -165,6 +167,11 @@ class MainActivity : ComponentActivity() {
                             onStopOverlay = { OverlayService.stop(this) },
                         )
                         is Screen.Editor -> GraphEditorScreen(
+                            scriptId = s.scriptId,
+                            viewModel = viewModel,
+                            onBack = viewModel::back,
+                        )
+                        is Screen.Triggers -> TriggersScreen(
                             scriptId = s.scriptId,
                             viewModel = viewModel,
                             onBack = viewModel::back,
@@ -255,6 +262,7 @@ class MainActivity : ComponentActivity() {
 private fun MainScreen(
     viewModel: MainViewModel,
     onOpenEditor: (Long) -> Unit,
+    onOpenTriggers: (Long) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenSettings: () -> Unit,
     onCreateScript: () -> Unit,
@@ -392,6 +400,7 @@ private fun MainScreen(
                     selected = s.id == selectedScriptId,
                     onSelect = { viewModel.selectScript(s.id) },
                     onEdit = { onOpenEditor(s.id) },
+                    onTriggers = { onOpenTriggers(s.id) },
                     onDelete = { viewModel.delete(s.id) },
                 )
             }
@@ -786,6 +795,7 @@ private fun ScriptItem(
     selected: Boolean,
     onSelect: () -> Unit,
     onEdit: () -> Unit,
+    onTriggers: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
@@ -840,6 +850,9 @@ private fun ScriptItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            IconButton(onClick = onTriggers) {
+                Icon(Icons.Filled.Notifications, contentDescription = "触发器")
             }
             IconButton(onClick = onEdit) {
                 Icon(Icons.Filled.Edit, contentDescription = "编辑")

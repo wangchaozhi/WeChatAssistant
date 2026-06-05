@@ -21,6 +21,11 @@ object ServiceBus {
 
     val playerCmd = MutableSharedFlow<PlayerCmd>(extraBufferCapacity = 4)
 
+    // 触发器(通知/定时)请求播放的脚本 id。用 StateFlow 而非 SharedFlow，
+    // 这样冷启动时无障碍服务后连接也能读到「待播放」的值（重放最新值）。
+    // 无障碍服务消费后会自行置回 null，便于下次同一脚本再次触发能再次 emit。
+    val pendingPlay = MutableStateFlow<Long?>(null)
+
     sealed interface CaptureCmd {
         data class TakeAndAsk(val prompt: String) : CaptureCmd
         data object JustCapture : CaptureCmd

@@ -11,23 +11,29 @@ import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.AiAnswer
 import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
+import com.wangchaozhi.wechatassistant.data.model.ScriptTrigger
+import com.wangchaozhi.wechatassistant.data.model.TriggerType
 
 class Converters {
     @TypeConverter fun typeToInt(t: ActionType): Int = t.ordinal
     @TypeConverter fun intToType(i: Int): ActionType = ActionType.entries[i]
+    @TypeConverter fun triggerTypeToInt(t: TriggerType): Int = t.ordinal
+    @TypeConverter fun intToTriggerType(i: Int): TriggerType = TriggerType.entries[i]
 }
 
 @Database(
-    entities = [Script::class, Action::class, AiAnswer::class, Edge::class],
+    entities = [Script::class, Action::class, AiAnswer::class, Edge::class, ScriptTrigger::class],
     // v10：移除 AI_TAP / SNAPSHOT / IF_PAGE_CHANGED / IF_TEXT_EXISTS 四种节点，ActionType 序号重排。
     // 不提供 9→10 迁移，靠 fallbackToDestructiveMigration 销毁重建（旧脚本数据按需求一并清空）。
-    version = 11,
+    // v12：CALL_SCRIPT 节点新增 callScriptId 列。v13：新增 triggers 触发器表。
+    version = 13,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun scriptDao(): ScriptDao
     abstract fun aiAnswerDao(): AiAnswerDao
+    abstract fun triggerDao(): TriggerDao
 
     companion object {
         // 给 actions 加节点别名列，保留已有脚本数据（不走销毁重建）。
@@ -64,6 +70,33 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_10_11 = object : Migration(10, 11) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE actions ADD COLUMN pasteText TEXT")
+            }
+        }
+
+        // CALL_SCRIPT 节点新增目标脚本 id 列，保留已有脚本数据。
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE actions ADD COLUMN callScriptId INTEGER")
+            }
+        }
+
+        // 新增触发器表（通知监听 / 定时启动脚本），保留已有脚本数据。
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS triggers (" +
+                        "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, " +
+                        "scriptId INTEGER NOT NULL, " +
+                        "type INTEGER NOT NULL, " +
+                        "enabled INTEGER NOT NULL, " +
+                        "hour INTEGER NOT NULL, " +
+                        "minute INTEGER NOT NULL, " +
+                        "daysMask INTEGER NOT NULL, " +
+                        "packageName TEXT NOT NULL, " +
+                        "keyword TEXT, " +
+                        "FOREIGN KEY(scriptId) REFERENCES scripts(id) ON DELETE CASCADE)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_triggers_scriptId ON triggers(scriptId)")
             }
         }
     }

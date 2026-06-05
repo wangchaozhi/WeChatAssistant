@@ -6,6 +6,11 @@
     <string name="channel_capture_name">屏幕截图</string>
     <string name="channel_overlay_name">悬浮控制面板</string>
     <string name="channel_adb_name">Wi-Fi ADB 配对</string>
+    <string name="channel_trigger_name">自动触发</string>
+
+    <string name="notif_listener_label">连点助手 · 通知监听</string>
+    <string name="trigger_need_accessibility_title">触发器已就绪，但无障碍未开启</string>
+    <string name="trigger_need_accessibility_text">点击开启「无障碍」服务后，触发器才能自动回放脚本。</string>
 
     <string name="notif_capture_title">屏幕截图已就绪</string>
     <string name="notif_capture_text">截图服务正在运行，可被脚本调用。</string>

@@ -9,9 +9,12 @@ import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.AiAnswer
 import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
+import com.wangchaozhi.wechatassistant.data.model.ScriptTrigger
 import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.data.repo.ScriptRepository
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
+import com.wangchaozhi.wechatassistant.data.repo.TriggerRepository
+import kotlinx.coroutines.flow.Flow
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
 import com.wangchaozhi.wechatassistant.feature.ai.VisionAiRepository
 import com.wangchaozhi.wechatassistant.service.ServiceBus
@@ -29,6 +32,7 @@ import java.util.Locale
 sealed interface Screen {
     data object Home : Screen
     data class Editor(val scriptId: Long?) : Screen
+    data class Triggers(val scriptId: Long) : Screen
     data object History : Screen
     data object Settings : Screen
 }
@@ -38,6 +42,7 @@ class MainViewModel(
     private val historyRepo: AiAnswerRepository,
     private val settings: SettingsRepository,
     private val visionAi: VisionAiRepository,
+    private val triggerRepo: TriggerRepository,
 ) : ViewModel() {
 
     var settingsModelsFetchedThisRun: Boolean = false
@@ -221,6 +226,15 @@ class MainViewModel(
         }
     }
 
+    fun observeTriggers(scriptId: Long): Flow<List<ScriptTrigger>> =
+        triggerRepo.observeForScript(scriptId)
+
+    suspend fun upsertTrigger(trigger: ScriptTrigger): Long = triggerRepo.upsert(trigger)
+
+    suspend fun deleteTrigger(trigger: ScriptTrigger) = triggerRepo.delete(trigger)
+
+    fun scriptName(scriptId: Long): String? = scripts.value.firstOrNull { it.id == scriptId }?.name
+
     fun deleteAnswer(answer: AiAnswer) {
         viewModelScope.launch { historyRepo.delete(answer.id, answer.thumbnailPath) }
     }
@@ -233,7 +247,13 @@ class MainViewModel(
         fun factory(app: App) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                MainViewModel(app.scriptRepo, app.aiAnswerRepo, app.settingsRepo, app.visionAi) as T
+                MainViewModel(
+                    app.scriptRepo,
+                    app.aiAnswerRepo,
+                    app.settingsRepo,
+                    app.visionAi,
+                    app.triggerRepo,
+                ) as T
         }
     }
 }
