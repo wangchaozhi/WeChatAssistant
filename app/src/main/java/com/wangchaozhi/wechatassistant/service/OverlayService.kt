@@ -86,7 +86,7 @@ class OverlayService : LifecycleService() {
     private val bubbleHandler = Handler(Looper.getMainLooper())
     private val hideBubble = Runnable { bubble?.visibility = View.GONE }
     private val recordedTouches = mutableListOf<ServiceBus.RawTouch>()
-    private val recordedPastes = mutableListOf<Long>()
+    private val recordedPastes = mutableListOf<RecordedPasteStep>()
     private val recordedEnters = mutableListOf<Long>()
     // 录制时点的 AI：start=点击时刻，end=AI 返回结果的时刻(默认等于 start，结果回来时回填)。
     // 用 end 作为这步的结束时间，下一步(如粘贴)的间隔才不会把 AI 识图耗时算进去。
@@ -425,7 +425,7 @@ class OverlayService : LifecycleService() {
         }
         val btnPaste = compactBtn(ctx, "粘贴") {
             if (recording) {
-                recordedPastes += recordTimestamp()
+                recordedPastes += RecordedPasteStep(recordTimestamp(), currentPasteText())
                 refreshStatus()
             }
             if (!ServiceBus.accessibilityReady.value) {
@@ -736,6 +736,15 @@ class OverlayService : LifecycleService() {
             }
         }
         bubbleHandler.postDelayed(hideBubble, 500)
+    }
+
+    private fun currentPasteText(): String? =
+        ServiceBus.lastAiAnswer.value?.takeIf { it.isNotEmpty() } ?: clipboardText()
+
+    private fun clipboardText(): String? {
+        val clip = getSystemService(android.content.ClipboardManager::class.java)
+        return clip?.primaryClip?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)?.coerceToText(this)?.toString()?.takeIf { it.isNotEmpty() }
     }
 
     private fun showRecordResult(scriptId: Long, scriptName: String) {
@@ -1513,7 +1522,7 @@ class OverlayService : LifecycleService() {
             ais.isEmpty() && templates.isEmpty()) return
         val events: List<RecordedEvent> =
             touches.map { RecordedEvent.Touch(it) } +
-                pastes.map { RecordedEvent.Paste(it) } +
+                pastes.map { RecordedEvent.Paste(it.timestamp, it.text) } +
                 enters.map { RecordedEvent.Enter(it) } +
                 ais.map { RecordedEvent.Ai(it.start, it.end, it.prompt) } +
                 templates.map { RecordedEvent.ImageMatch(it.first, it.second) }
@@ -1552,6 +1561,7 @@ class OverlayService : LifecycleService() {
                     startY = 0f,
                     durationMs = 0L,
                     delayBeforeMs = delay,
+                    pasteText = ev.text,
                 )
                 is RecordedEvent.Ai -> Action(
                     scriptId = 0,
@@ -1614,7 +1624,7 @@ class OverlayService : LifecycleService() {
             override val timestamp: Long get() = raw.timestamp
             override val endTimestamp: Long get() = raw.timestamp + raw.durationMs
         }
-        data class Paste(override val timestamp: Long) : RecordedEvent {
+        data class Paste(override val timestamp: Long, val text: String?) : RecordedEvent {
             override val endTimestamp: Long get() = timestamp
         }
         data class Enter(override val timestamp: Long) : RecordedEvent {
@@ -1631,6 +1641,7 @@ class OverlayService : LifecycleService() {
     }
 
     private data class RecordedAiStep(val start: Long, val prompt: String, var end: Long)
+    private data class RecordedPasteStep(val timestamp: Long, val text: String?)
 
     /** 记录所选脚本：更新内存状态、持久化 id、刷新面板标签。 */
     private fun setSelectedScript(id: Long, name: String?) {

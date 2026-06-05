@@ -21,7 +21,7 @@ class Converters {
     entities = [Script::class, Action::class, AiAnswer::class, Edge::class],
     // v10：移除 AI_TAP / SNAPSHOT / IF_PAGE_CHANGED / IF_TEXT_EXISTS 四种节点，ActionType 序号重排。
     // 不提供 9→10 迁移，靠 fallbackToDestructiveMigration 销毁重建（旧脚本数据按需求一并清空）。
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -57,6 +57,13 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE actions ADD COLUMN randomExtraMs INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        // PASTE 节点新增录制时捕获的剪贴板文本，保留已有脚本数据。
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE actions ADD COLUMN pasteText TEXT")
             }
         }
     }

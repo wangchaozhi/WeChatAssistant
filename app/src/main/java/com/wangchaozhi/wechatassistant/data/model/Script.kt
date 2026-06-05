@@ -76,6 +76,8 @@ data class Action(
     // 为 null 表示跟随全局设置。
     val aiProvider: String? = null,
     val aiModel: String? = null,
+    // PASTE 节点专用：录制时捕获的剪贴板文本。为空时回放仍使用当前 AI 答案/剪贴板。
+    val pasteText: String? = null,
 )
 
 data class ScriptWithActions(

@@ -112,12 +112,12 @@ class ClickerAccessibilityService : AccessibilityService() {
         )
     }
 
-    private fun pasteIntoFocused(): Boolean {
+    private fun pasteIntoFocused(preferredText: String? = null): Boolean {
         // 1) 首选：无障碍输入法接口直接 commitText（Android 14+）。走的是和真实键盘相同的
         //    InputConnection 通道，由输入框自己接收，不依赖无障碍节点——微信等剥掉节点信息的
         //    输入框也能写进去。要写的文本取自我们自己内存里的 AI 答案（后台读不到剪贴板）。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val text = pasteText()
+            val text = pasteText(preferredText)
             if (!text.isNullOrEmpty() && commitViaIme(text)) return true
         }
         // 2) 兜底：节点动作。ACTION_PASTE 用系统剪贴板，SET_TEXT 直接写文本。
@@ -129,13 +129,16 @@ class ClickerAccessibilityService : AccessibilityService() {
         App.from(this).appendLog(
             "PASTE target=${node.className} editable=${node.isEditable} focused=${node.isFocused}"
         )
+        if (!preferredText.isNullOrEmpty()) return pasteBySetText(node, preferredText)
         if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) return true
-        return pasteBySetText(node)
+        return pasteBySetText(node, preferredText)
     }
 
-    /** 要粘贴的文本：优先内存里的 AI 答案，其次尝试剪贴板（后台多半读不到）。 */
-    private fun pasteText(): String? =
-        ServiceBus.lastAiAnswer.value?.takeIf { it.isNotEmpty() } ?: clipboardText()
+    /** 要粘贴的文本：优先节点自带文本，其次内存里的 AI 答案，最后尝试剪贴板（后台多半读不到）。 */
+    private fun pasteText(preferredText: String? = null): String? =
+        preferredText?.takeIf { it.isNotEmpty() }
+            ?: ServiceBus.lastAiAnswer.value?.takeIf { it.isNotEmpty() }
+            ?: clipboardText()
 
     /** 通过无障碍输入法接口把文本 commit 到当前获焦的输入框。Android 14+。 */
     @androidx.annotation.RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
@@ -181,8 +184,8 @@ class ClickerAccessibilityService : AccessibilityService() {
     }
 
     /** ACTION_PASTE 不被支持时的兜底：读剪贴板，把文本追加到光标处（无选区则末尾）。 */
-    private fun pasteBySetText(node: AccessibilityNodeInfo): Boolean {
-        val text = pasteText()
+    private fun pasteBySetText(node: AccessibilityNodeInfo, preferredText: String? = null): Boolean {
+        val text = pasteText(preferredText)
         if (text.isNullOrEmpty()) {
             App.from(this).appendLog("PASTE: 无可粘贴文本，SET_TEXT 兜底失败")
             return false
@@ -629,7 +632,7 @@ class ClickerAccessibilityService : AccessibilityService() {
                 )
             }
             ActionType.PASTE -> {
-                withContext(Dispatchers.Main.immediate) { pasteIntoFocused() }
+                withContext(Dispatchers.Main.immediate) { pasteIntoFocused(action.pasteText) }
             }
             ActionType.ENTER -> {
                 withContext(Dispatchers.Main.immediate) { enterIntoFocused() }
