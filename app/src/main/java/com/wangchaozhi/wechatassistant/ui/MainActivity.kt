@@ -189,7 +189,21 @@ class MainActivity : ComponentActivity() {
         handleLaunchIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        ServiceBus.mainActivityInForeground.value = true
+    }
+
+    override fun onPause() {
+        ServiceBus.mainActivityInForeground.value = false
+        super.onPause()
+    }
+
     private fun handleLaunchIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_RETURN_TO_PREVIOUS, false) == true) {
+            moveTaskToBack(true)
+            return
+        }
         val id = intent?.getLongExtra(EXTRA_EDIT_SCRIPT_ID, -1L) ?: -1L
         val createNew = intent?.getBooleanExtra(EXTRA_NEW_SCRIPT, false) == true
         val requestCapture = intent?.getBooleanExtra(EXTRA_REQUEST_CAPTURE, false) == true
@@ -232,6 +246,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_EDIT_SCRIPT_ID = "extra_edit_script_id"
         const val EXTRA_NEW_SCRIPT = "extra_new_script"
         const val EXTRA_REQUEST_CAPTURE = "extra_request_capture"
+        const val EXTRA_RETURN_TO_PREVIOUS = "extra_return_to_previous"
     }
 }
 

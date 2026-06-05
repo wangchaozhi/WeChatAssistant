@@ -154,7 +154,13 @@ class MainViewModel(
     }
 
     fun delete(scriptId: Long) {
-        viewModelScope.launch { scriptRepo.delete(scriptId) }
+        viewModelScope.launch {
+            scriptRepo.delete(scriptId)
+            if (settings.selectedScriptId == scriptId) {
+                settings.selectedScriptId = -1L
+                ServiceBus.selectedScriptChanged.tryEmit(-1L)
+            }
+        }
     }
 
     fun selectScript(scriptId: Long) {

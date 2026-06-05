@@ -12,6 +12,7 @@ object ServiceBus {
     val captureReady = MutableStateFlow(false)
     val overlayReady = MutableStateFlow(false)
     val overlayHidden = MutableStateFlow(false)
+    val mainActivityInForeground = MutableStateFlow(false)
 
     sealed interface PlayerCmd {
         data class Play(val scriptId: Long) : PlayerCmd
