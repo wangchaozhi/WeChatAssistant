@@ -45,7 +45,6 @@ object ServiceBus {
         data object StartRecording : OverlayCmd
         data object StopRecording : OverlayCmd
         data class RecordedAction(val raw: RawTouch) : OverlayCmd
-        data class RequestSnapshotRegionPick(val requestId: Long, val scriptIdToEdit: Long?) : OverlayCmd
         data class RequestTemplatePick(val requestId: Long, val scriptIdToEdit: Long?) : OverlayCmd
         data class FlashRegionMask(val rect: Rect) : OverlayCmd
         data class FlashPositionMarker(val marker: PositionMarker) : OverlayCmd
@@ -64,8 +63,6 @@ object ServiceBus {
         ) : PositionMarker
     }
 
-    data class SnapshotRegionPickResult(val requestId: Long, val rect: Rect, val previewPath: String?)
-    val snapshotRegionPickResult = MutableSharedFlow<SnapshotRegionPickResult>(extraBufferCapacity = 4)
     data class TemplatePickResult(val requestId: Long, val templatePath: String, val rect: Rect)
     val templatePickResult = MutableSharedFlow<TemplatePickResult>(extraBufferCapacity = 4)
     val selectedScriptChanged = MutableSharedFlow<Long>(extraBufferCapacity = 4)

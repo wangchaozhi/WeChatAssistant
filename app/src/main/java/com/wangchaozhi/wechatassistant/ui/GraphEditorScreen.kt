@@ -66,6 +66,7 @@ import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
+import com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
 import com.wangchaozhi.wechatassistant.service.ServiceBus
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -82,8 +83,8 @@ private const val PORT_HIT = 48f   // 连线落点命中输入端口的 dp 半�
 private data class Wiring(val anchorId: Long, val port: Int, val end: Offset, val reversed: Boolean = false)
 
 /** 双出口节点：条件节点（变/有）和循环节点（环/完）。 */
-private fun isTwoPort(t: ActionType): Boolean = t == ActionType.IF_PAGE_CHANGED ||
-    t == ActionType.IF_IMAGE_EXISTS || t == ActionType.IF_TEXT_EXISTS || t == ActionType.LOOP
+private fun isTwoPort(t: ActionType): Boolean =
+    t == ActionType.IF_IMAGE_EXISTS || t == ActionType.LOOP
 
 /** 节点的输出端口列表（双出口节点两个，STOP 无出口，其它一个）。 */
 private fun outPorts(n: Action): List<Int> = when {
@@ -126,10 +127,8 @@ fun GraphEditorScreen(
     val density = LocalDensity.current.density
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // 选图：pendingRecaptureId=给 IMAGE_MATCH 设模板；pendingLiveRegion=给 SNAPSHOT 现场框选屏幕范围。
+    // 选图：pendingRecaptureId=给 IMAGE_MATCH 设模板；pendingLiveTemplate=现场框选模板(并写搜索范围)。
     var pendingRecaptureId by remember { mutableStateOf<Long?>(null) }
-    var pendingLiveRegionId by remember { mutableStateOf<Long?>(null) }
-    var pendingLiveRegionRequestId by remember { mutableStateOf<Long?>(null) }
     var pendingLiveTemplateId by remember { mutableStateOf<Long?>(null) }
     var pendingLiveTemplateRequestId by remember { mutableStateOf<Long?>(null) }
     var cropSource by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
@@ -175,25 +174,6 @@ fun GraphEditorScreen(
         redoStack.clear()
     }
 
-    fun applyLiveSnapshotRegion(result: ServiceBus.SnapshotRegionPickResult) {
-        if (result.requestId != pendingLiveRegionRequestId) return
-        val id = pendingLiveRegionId ?: return
-        val i = nodes.indexOfFirst { it.id == id }
-        if (i >= 0) {
-            pushUndo()
-            val rect = result.rect
-            nodes[i] = nodes[i].copy(
-                startX = rect.left.toFloat(),
-                startY = rect.top.toFloat(),
-                endX = rect.right.toFloat(),
-                endY = rect.bottom.toFloat(),
-                templatePath = result.previewPath ?: nodes[i].templatePath,
-            )
-        }
-        pendingLiveRegionId = null
-        pendingLiveRegionRequestId = null
-    }
-
     fun applyLiveTemplate(result: ServiceBus.TemplatePickResult) {
         if (result.requestId != pendingLiveTemplateRequestId) return
         val id = pendingLiveTemplateId ?: return
@@ -206,15 +186,14 @@ fun GraphEditorScreen(
                 startY = rect.top.toFloat(),
                 endX = rect.right.toFloat(),
                 endY = rect.bottom.toFloat(),
-                templatePath = result.templatePath,
+                templatePath = TemplateMatchUseCase.appendTemplatePath(
+                    nodes[i].templatePath,
+                    result.templatePath,
+                ),
             )
         }
         pendingLiveTemplateId = null
         pendingLiveTemplateRequestId = null
-    }
-
-    LaunchedEffect(Unit) {
-        ServiceBus.snapshotRegionPickResult.collect { applyLiveSnapshotRegion(it) }
     }
 
     LaunchedEffect(Unit) {
@@ -424,9 +403,7 @@ fun GraphEditorScreen(
                     val green = Color(0xFF66BB6A)
                     val red = Color(0xFFEF5350)
                     val outs = when (node.type) {
-                        ActionType.IF_PAGE_CHANGED ->
-                            listOf(0 to "是" to green, 1 to "否" to red)
-                        ActionType.IF_IMAGE_EXISTS, ActionType.IF_TEXT_EXISTS ->
+                        ActionType.IF_IMAGE_EXISTS ->
                             listOf(0 to "有" to green, 1 to "无" to red)
                         ActionType.LOOP ->
                             listOf(0 to "环" to green, 1 to "完" to red)
@@ -461,6 +438,11 @@ fun GraphEditorScreen(
                 onConfirm = { updated -> nodes[idx] = updated; editingId = null },
                 fetchModels = { viewModel.fetchModels(it) },
                 cachedModels = { viewModel.cachedModels(it) },
+                onClearTemplate = {
+                    // 清空模板，下次「框选」即为重选(替换)，并会重新写入搜索范围 region。
+                    pushUndo()
+                    nodes[idx] = nodes[idx].copy(templatePath = null)
+                },
                 onRecaptureTemplate = {
                     if (!ServiceBus.overlayReady.value) {
                         android.widget.Toast.makeText(
@@ -490,37 +472,6 @@ fun GraphEditorScreen(
                         "切到目标页面后，点悬浮面板「框选」",
                         android.widget.Toast.LENGTH_LONG,
                     ).show()
-                },
-                onPickRegion = {
-                    if (!ServiceBus.overlayReady.value) {
-                        android.widget.Toast.makeText(
-                            context,
-                            "请先启动悬浮面板，再现场框选快照范围",
-                            android.widget.Toast.LENGTH_LONG,
-                        ).show()
-                        return@EditActionDialog
-                    }
-                    if (!ServiceBus.captureReady.value) {
-                        android.widget.Toast.makeText(
-                            context,
-                            "请先启动截图服务，再现场框选快照范围",
-                            android.widget.Toast.LENGTH_LONG,
-                        ).show()
-                        return@EditActionDialog
-                    }
-                    val requestId = System.currentTimeMillis()
-                    pendingLiveRegionId = ed
-                    pendingLiveRegionRequestId = requestId
-                    editingId = null
-                    ServiceBus.overlayCmd.tryEmit(
-                        ServiceBus.OverlayCmd.RequestSnapshotRegionPick(requestId, script?.id?.takeIf { it > 0 })
-                    )
-                    android.widget.Toast.makeText(
-                        context,
-                        "切到目标页面后，点悬浮面板「框选」",
-                        android.widget.Toast.LENGTH_LONG,
-                    )
-                        .show()
                 },
             )
         }
@@ -571,11 +522,17 @@ fun GraphEditorScreen(
             source = src,
             onDismiss = { cropSource = null; pendingRecaptureId = null },
             onConfirm = { bitmap ->
-                val path = com.wangchaozhi.wechatassistant.feature.match
-                    .TemplateMatchUseCase.saveTemplate(context, bitmap)
+                val path = TemplateMatchUseCase.saveTemplate(context, bitmap)
                 val id = pendingRecaptureId
                 val i = if (id != null) nodes.indexOfFirst { it.id == id } else -1
-                if (i >= 0 && path != null) nodes[i] = nodes[i].copy(templatePath = path)
+                if (i >= 0 && path != null) {
+                    nodes[i] = nodes[i].copy(
+                        templatePath = TemplateMatchUseCase.appendTemplatePath(
+                            nodes[i].templatePath,
+                            path,
+                        )
+                    )
+                }
                 cropSource = null; pendingRecaptureId = null
             },
         )
@@ -610,10 +567,7 @@ private fun NodeCard(
 ) {
     val color = when (node.type) {
         ActionType.START -> Color(0xFF1B5E20)
-        ActionType.SNAPSHOT -> Color(0xFF4527A0)
-        ActionType.IF_PAGE_CHANGED,
-        ActionType.IF_IMAGE_EXISTS,
-        ActionType.IF_TEXT_EXISTS -> Color(0xFFE65100)
+        ActionType.IF_IMAGE_EXISTS -> Color(0xFFE65100)
         ActionType.LOOP -> Color(0xFF00838F)
         ActionType.STOP -> Color(0xFFB71C1C)
         else -> Color(0xFF37474F)
@@ -639,40 +593,7 @@ private fun NodeCard(
             } else {
                 Text(typeLabel(node.type), color = Color.White, style = MaterialTheme.typography.bodyMedium)
             }
-            if (node.type == ActionType.SNAPSHOT) {
-                val region = node.endX > node.startX && node.endY > node.startY
-                val snapPath = node.templatePath?.ifBlank { null }
-                val snapBmp = remember(snapPath) {
-                    snapPath?.let { p ->
-                        runCatching { if (File(p).exists()) BitmapFactory.decodeFile(p) else null }.getOrNull()
-                    }
-                }
-                Text(
-                    "「${node.aiPrompt?.ifBlank { null } ?: "默认"}」" +
-                        if (snapBmp != null) " ▣基准图" else if (region) " ▣范围" else "",
-                    color = Color(0xCCFFFFFF),
-                    style = MaterialTheme.typography.labelSmall,
-                )
-                if (snapBmp != null) {
-                    Image(
-                        bitmap = snapBmp.asImageBitmap(),
-                        contentDescription = "快照基准图",
-                        modifier = Modifier.height(22.dp),
-                        contentScale = ContentScale.Fit,
-                    )
-                }
-            }
-            if (node.type == ActionType.IF_PAGE_CHANGED) {
-                val a = node.aiPrompt?.ifBlank { null } ?: "默认"
-                val b = node.templatePath?.ifBlank { null }
-                Text(
-                    (if (b != null) "「$a」↔「$b」" else "「$a」↔ 实时") +
-                        " · 阈值${"%.2f".format(node.matchThreshold)}",
-                    color = Color(0xCCFFFFFF),
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-            if (node.type == ActionType.SCREENSHOT_AI || node.type == ActionType.AI_TAP) {
+            if (node.type == ActionType.SCREENSHOT_AI) {
                 Text(
                     aiModelLabel(node),
                     color = Color(0xCCFFFFFF),
@@ -680,15 +601,11 @@ private fun NodeCard(
                 )
             }
             if (node.type == ActionType.IF_IMAGE_EXISTS) {
+                val count = TemplateMatchUseCase.splitTemplatePaths(node.templatePath).size
                 Text(
-                    if (node.templatePath != null) "▣模板 · 阈值${"%.2f".format(node.matchThreshold)}" else "⚠ 未设模板",
-                    color = Color(0xCCFFFFFF),
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-            if (node.type == ActionType.IF_TEXT_EXISTS) {
-                Text(
-                    "「${node.aiPrompt?.ifBlank { null } ?: "?"}」",
+                    if (count > 0)
+                        "▣模板${count}张 · 精度${TemplateMatchUseCase.thresholdToPrecision(node.matchThreshold)}"
+                    else "⚠ 未设模板",
                     color = Color(0xCCFFFFFF),
                     style = MaterialTheme.typography.labelSmall,
                 )
@@ -761,14 +678,10 @@ private val NODE_GROUPS: List<Pair<String, List<Pair<ActionType, String>>>> = li
     ),
     "找图 / AI" to listOf(
         ActionType.SCREENSHOT_AI to "AI 截图问答",
-        ActionType.AI_TAP to "AI 找图点击",
         ActionType.IMAGE_MATCH to "选图点击",
     ),
-    "快照 / 条件" to listOf(
-        ActionType.SNAPSHOT to "快照（记基准）",
-        ActionType.IF_PAGE_CHANGED to "检测快照变化",
+    "条件" to listOf(
         ActionType.IF_IMAGE_EXISTS to "图像是否存在",
-        ActionType.IF_TEXT_EXISTS to "文字是否存在",
     ),
     "流程控制" to listOf(
         ActionType.LOOP to "循环 N 次",

@@ -41,6 +41,7 @@ import androidx.lifecycle.lifecycleScope
 import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.R
 import com.wangchaozhi.wechatassistant.data.model.Action
+import com.wangchaozhi.wechatassistant.data.model.ActionDefaults
 import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Edge
 import com.wangchaozhi.wechatassistant.data.model.Script
@@ -90,10 +91,7 @@ class OverlayService : LifecycleService() {
     private val recordedAi = mutableListOf<RecordedAiStep>()
     // 录制时截的模板：时间戳 + 模板图路径，停止录制时插进时间线变成 IMAGE_MATCH 步骤。
     private val recordedTemplates = mutableListOf<Pair<Long, String>>()
-    private val recordedSnapshots = mutableListOf<RecordedSnapshot>()
     private var cropOverlay: View? = null
-    private var pendingLiveRegionPickRequestId: Long? = null
-    private var pendingLiveRegionPickScriptId: Long? = null
     private var pendingLiveTemplatePickRequestId: Long? = null
     private var pendingLiveTemplatePickScriptId: Long? = null
     private var positionMaskView: View? = null
@@ -145,7 +143,7 @@ class OverlayService : LifecycleService() {
                 panelView?.post {
                     panelView?.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
                 }
-                // 录制层也跟着隐藏：模板/快照/AI 截图时不能截到本层。
+                // 录制层也跟着隐藏：模板/AI 截图时不能截到本层。
                 recordOverlay?.post {
                     recordOverlay?.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
                 }
@@ -179,8 +177,6 @@ class OverlayService : LifecycleService() {
                     ServiceBus.OverlayCmd.StartRecording,
                     ServiceBus.OverlayCmd.StopRecording,
                     is ServiceBus.OverlayCmd.RecordedAction -> Unit
-                    is ServiceBus.OverlayCmd.RequestSnapshotRegionPick ->
-                        beginLiveSnapshotRegionPick(cmd.requestId, cmd.scriptIdToEdit)
                     is ServiceBus.OverlayCmd.RequestTemplatePick ->
                         beginLiveTemplatePick(cmd.requestId, cmd.scriptIdToEdit)
                     is ServiceBus.OverlayCmd.FlashRegionMask ->
@@ -430,17 +426,6 @@ class OverlayService : LifecycleService() {
             }
             captureTemplateForRecording()
         }
-        val btnSnapshot = compactBtn(ctx, "快照") {
-            if (!recording) {
-                Toast.makeText(ctx, "请先开始录制，再框选快照", Toast.LENGTH_SHORT).show()
-                return@compactBtn
-            }
-            if (!ServiceBus.captureReady.value) {
-                Toast.makeText(ctx, "请先在主界面启动「截图服务」", Toast.LENGTH_LONG).show()
-                return@compactBtn
-            }
-            captureSnapshotForRecording()
-        }
         val btnLiveRegionPick = compactBtn(ctx, "框选") {
             captureLivePickForEditor()
         }.apply {
@@ -476,7 +461,6 @@ class OverlayService : LifecycleService() {
         }
         templateRow.addView(templateLabel)
         templateRow.addView(btnTemplate)
-        templateRow.addView(btnSnapshot)
         templateRow.addView(btnLiveRegionPick)
         systemRow.addView(btnHome)
         systemRow.addView(btnClose)
@@ -889,7 +873,6 @@ class OverlayService : LifecycleService() {
             recordedEnters.clear()
             recordedAi.clear()
             recordedTemplates.clear()
-            recordedSnapshots.clear()
             btn.text = "完成"
             ServiceBus.recordingMode.value = true
             ServiceBus.adbRecording.value = false
@@ -932,7 +915,6 @@ class OverlayService : LifecycleService() {
             recordedEnters.clear()
             recordedAi.clear()
             recordedTemplates.clear()
-            recordedSnapshots.clear()
             btn.text = "完成"
             ServiceBus.recordingMode.value = true
             ServiceBus.adbRecording.value = true
@@ -959,7 +941,7 @@ class OverlayService : LifecycleService() {
         refreshStatus()
     }
 
-    /** 添加全屏透明录制层，并把控制面板重新抬到最上层，保证 完成/模板/快照 仍可点。 */
+    /** 添加全屏透明录制层，并把控制面板重新抬到最上层，保证 完成/模板 仍可点。 */
     private fun showRecordOverlay() {
         if (recordOverlay != null) return
         val view = RecordOverlayView(this) { raw -> onOverlayGesture(raw) }
@@ -1034,7 +1016,7 @@ class OverlayService : LifecycleService() {
         if (recording) {
             val captured = recordedTouches.size + recordedPastes.size +
                 recordedEnters.size + recordedAi.size +
-                recordedTemplates.size + recordedSnapshots.size
+                recordedTemplates.size
             statusLabel?.text = "录制中 · $captured 步"
             return
         }
@@ -1067,19 +1049,6 @@ class OverlayService : LifecycleService() {
         showLiveTemplateCropOverlayForRecording()
     }
 
-    private fun captureSnapshotForRecording() {
-        if (cropOverlay != null) return
-        suppressTouchRecording = true
-        showLiveSnapshotCropOverlayForRecording()
-    }
-
-    private fun beginLiveSnapshotRegionPick(requestId: Long, scriptIdToEdit: Long?) {
-        pendingLiveRegionPickRequestId = requestId
-        pendingLiveRegionPickScriptId = scriptIdToEdit
-        liveRegionPickBtn?.visibility = View.VISIBLE
-        Toast.makeText(this, "切到目标页面后，点悬浮面板「框选」", Toast.LENGTH_LONG).show()
-    }
-
     private fun beginLiveTemplatePick(requestId: Long, scriptIdToEdit: Long?) {
         pendingLiveTemplatePickRequestId = requestId
         pendingLiveTemplatePickScriptId = scriptIdToEdit
@@ -1088,20 +1057,14 @@ class OverlayService : LifecycleService() {
     }
 
     private fun captureLivePickForEditor() {
-        val snapshotRequestId = pendingLiveRegionPickRequestId
-        val templateRequestId = pendingLiveTemplatePickRequestId
-        if (snapshotRequestId == null && templateRequestId == null) return
+        val templateRequestId = pendingLiveTemplatePickRequestId ?: return
         if (!ServiceBus.captureReady.value) {
             Toast.makeText(this, "请先在主界面启动「截图服务」", Toast.LENGTH_LONG).show()
             return
         }
         if (cropOverlay != null) return
         suppressTouchRecording = true
-        if (templateRequestId != null) {
-            showLiveTemplateCropOverlayForEditor(templateRequestId)
-        } else if (snapshotRequestId != null) {
-            showLiveSnapshotCropOverlayForEditor(snapshotRequestId)
-        }
+        showLiveTemplateCropOverlayForEditor(templateRequestId)
     }
 
     private suspend fun captureScreenBitmap(): android.graphics.Bitmap? {
@@ -1215,68 +1178,6 @@ class OverlayService : LifecycleService() {
         }
     }
 
-    private fun showLiveSnapshotCropOverlayForRecording() {
-        showLiveCropOverlay(
-            hintText = "在真实页面上拖动框选快照范围，然后点「确定」",
-            tooSmallText = "框选区域太小",
-        ) { rect ->
-            // 录制时就把框选区域截下来存盘，作为该快照的固定基准图(回放时直接用，不再实时重截)。
-            panelView?.visibility = View.INVISIBLE
-            removeCropOverlay()
-            lifecycleScope.launch {
-                kotlinx.coroutines.delay(160)
-                val bmp = captureScreenBitmap()
-                panelView?.visibility = View.VISIBLE
-                val cropped = bmp?.let { cropBitmapByScreenRect(it, rect) }
-                if (cropped == null) {
-                    Toast.makeText(this@OverlayService, "截图失败或框选区域太小", Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
-                val path = com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
-                    .saveTemplate(this@OverlayService, cropped)
-                cropped.recycle()
-                val name = "快照${recordedSnapshots.size + 1}"
-                recordedSnapshots += RecordedSnapshot(recordTimestamp(), name, rect, path)
-                refreshStatus()
-                Toast.makeText(
-                    this@OverlayService,
-                    if (path != null) "已记录快照：$name" else "已记录快照范围：$name(截图失败，回放时改为实时截基准)",
-                    Toast.LENGTH_SHORT,
-                ).show()
-            }
-        }
-    }
-
-    private fun showLiveSnapshotCropOverlayForEditor(requestId: Long) {
-        showLiveCropOverlay(
-            hintText = "在真实页面上拖动框选快照范围，然后点「确定」",
-            tooSmallText = "框选区域太小",
-        ) { rect ->
-            val scriptIdToEdit = pendingLiveRegionPickScriptId
-            pendingLiveRegionPickRequestId = null
-            pendingLiveRegionPickScriptId = null
-            liveRegionPickBtn?.visibility = View.GONE
-            panelView?.visibility = View.INVISIBLE
-            removeCropOverlay()
-            lifecycleScope.launch {
-                kotlinx.coroutines.delay(160)
-                val bmp = captureScreenBitmap()
-                panelView?.visibility = View.VISIBLE
-                val preview = bmp?.let { cropBitmapByScreenRect(it, rect) }
-                val previewPath = preview?.let {
-                    com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
-                        .saveTemplate(this@OverlayService, it)
-                }
-                preview?.recycle()
-                ServiceBus.snapshotRegionPickResult.tryEmit(
-                    ServiceBus.SnapshotRegionPickResult(requestId, rect, previewPath)
-                )
-                Toast.makeText(this@OverlayService, "已回填快照范围", Toast.LENGTH_SHORT).show()
-                launchHome(scriptIdToEdit)
-            }
-        }
-    }
-
     private fun showLiveTemplateCropOverlayForEditor(requestId: Long) {
         showLiveCropOverlay(
             hintText = "在真实页面上拖动框选要识别的图片，然后点「确定」",
@@ -1345,142 +1246,6 @@ class OverlayService : LifecycleService() {
                 Toast.makeText(ctx, "模板保存失败", Toast.LENGTH_SHORT).show()
             }
             removeCropOverlay()
-        }
-        btnRow.addView(cancel)
-        btnRow.addView(confirm)
-        root.addView(hint)
-        root.addView(cropView, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        root.addView(btnRow)
-
-        val params = WindowManager.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            overlayType(),
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        )
-        cropOverlay = root
-        wm.addView(root, params)
-    }
-
-    private fun showSnapshotCropOverlay(bmp: android.graphics.Bitmap) {
-        val ctx: Context = this
-        val cropView = TemplateCropView(ctx, bmp)
-        val root = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#F2000000"))
-        }
-        val hint = TextView(ctx).apply {
-            text = "拖动框选快照范围，然后点「确定」"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            setPadding(dp(16), dp(12), dp(16), dp(8))
-        }
-        val btnRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(16), dp(8), dp(16), dp(16))
-        }
-        val cancel = compactBtn(ctx, "取消") { removeCropOverlay() }
-        val confirm = compactBtn(ctx, "确定") {
-            val preview = cropView.crop()
-            if (preview == null) {
-                Toast.makeText(ctx, "框选区域太小", Toast.LENGTH_SHORT).show()
-                return@compactBtn
-            }
-            // 存下裁剪图作为该快照的基准图，回放时直接用。
-            val previewPath = com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
-                .saveTemplate(ctx, preview)
-            preview.recycle()
-            val crop = cropView.cropRect()
-            val dm = resources.displayMetrics
-            val sx = dm.widthPixels.toFloat() / bmp.width.coerceAtLeast(1)
-            val sy = dm.heightPixels.toFloat() / bmp.height.coerceAtLeast(1)
-            val rect = android.graphics.Rect(
-                (crop.left * sx).roundToInt().coerceIn(0, dm.widthPixels),
-                (crop.top * sy).roundToInt().coerceIn(0, dm.heightPixels),
-                (crop.right * sx).roundToInt().coerceIn(0, dm.widthPixels),
-                (crop.bottom * sy).roundToInt().coerceIn(0, dm.heightPixels),
-            )
-            if (rect.width() < 8 || rect.height() < 8) {
-                Toast.makeText(ctx, "框选区域太小", Toast.LENGTH_SHORT).show()
-                return@compactBtn
-            }
-            val name = "快照${recordedSnapshots.size + 1}"
-            recordedSnapshots += RecordedSnapshot(recordTimestamp(), name, rect, previewPath)
-            refreshStatus()
-            Toast.makeText(ctx, "已记录快照范围：$name", Toast.LENGTH_SHORT).show()
-            removeCropOverlay()
-        }
-        btnRow.addView(cancel)
-        btnRow.addView(confirm)
-        root.addView(hint)
-        root.addView(cropView, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        root.addView(btnRow)
-
-        val params = WindowManager.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            overlayType(),
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        )
-        cropOverlay = root
-        wm.addView(root, params)
-    }
-
-    private fun showEditorSnapshotRegionCropOverlay(requestId: Long, bmp: android.graphics.Bitmap) {
-        val ctx: Context = this
-        val cropView = TemplateCropView(ctx, bmp)
-        val root = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#F2000000"))
-        }
-        val hint = TextView(ctx).apply {
-            text = "拖动框选快照范围，然后点「确定」"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            setPadding(dp(16), dp(12), dp(16), dp(8))
-        }
-        val btnRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(16), dp(8), dp(16), dp(16))
-        }
-        val cancel = compactBtn(ctx, "取消") { removeCropOverlay() }
-        val confirm = compactBtn(ctx, "确定") {
-            val preview = cropView.crop()
-            if (preview == null) {
-                Toast.makeText(ctx, "框选区域太小", Toast.LENGTH_SHORT).show()
-                return@compactBtn
-            }
-            val previewPath = com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
-                .saveTemplate(ctx, preview)
-            preview.recycle()
-            val crop = cropView.cropRect()
-            val dm = resources.displayMetrics
-            val sx = dm.widthPixels.toFloat() / bmp.width.coerceAtLeast(1)
-            val sy = dm.heightPixels.toFloat() / bmp.height.coerceAtLeast(1)
-            val rect = android.graphics.Rect(
-                (crop.left * sx).roundToInt().coerceIn(0, dm.widthPixels),
-                (crop.top * sy).roundToInt().coerceIn(0, dm.heightPixels),
-                (crop.right * sx).roundToInt().coerceIn(0, dm.widthPixels),
-                (crop.bottom * sy).roundToInt().coerceIn(0, dm.heightPixels),
-            )
-            if (rect.width() < 8 || rect.height() < 8) {
-                Toast.makeText(ctx, "框选区域太小", Toast.LENGTH_SHORT).show()
-                return@compactBtn
-            }
-            val scriptIdToEdit = pendingLiveRegionPickScriptId
-            pendingLiveRegionPickRequestId = null
-            pendingLiveRegionPickScriptId = null
-            liveRegionPickBtn?.visibility = View.GONE
-            ServiceBus.snapshotRegionPickResult.tryEmit(
-                ServiceBus.SnapshotRegionPickResult(requestId, rect, previewPath)
-            )
-            Toast.makeText(ctx, "已回填快照范围", Toast.LENGTH_SHORT).show()
-            removeCropOverlay()
-            launchHome(scriptIdToEdit)
         }
         btnRow.addView(cancel)
         btnRow.addView(confirm)
@@ -1669,15 +1434,7 @@ class OverlayService : LifecycleService() {
         )
         positionMaskView = view
         wm.addView(view, params)
-        repeat(7) { i ->
-            bubbleHandler.postDelayed({
-                if (positionMaskView === view) {
-                    view.visibleFrame = i % 2 == 0
-                    view.invalidate()
-                }
-            }, i * 180L)
-        }
-        bubbleHandler.postDelayed({ removePositionMask() }, 1_400L)
+        bubbleHandler.postDelayed({ removePositionMask() }, POSITION_MARKER_VISIBLE_MS)
     }
 
     private fun removePositionMask() {
@@ -1691,26 +1448,24 @@ class OverlayService : LifecycleService() {
         val enters = recordedEnters.toList()
         val ais = recordedAi.toList()
         val templates = recordedTemplates.toList()
-        val snapshots = recordedSnapshots.toList()
         recordedTouches.clear()
         recordedPastes.clear()
         recordedEnters.clear()
         recordedAi.clear()
         recordedTemplates.clear()
-        recordedSnapshots.clear()
         if (touches.isEmpty() && pastes.isEmpty() && enters.isEmpty() &&
-            ais.isEmpty() && templates.isEmpty() && snapshots.isEmpty()) return
+            ais.isEmpty() && templates.isEmpty()) return
         val events: List<RecordedEvent> =
             touches.map { RecordedEvent.Touch(it) } +
                 pastes.map { RecordedEvent.Paste(it) } +
                 enters.map { RecordedEvent.Enter(it) } +
                 ais.map { RecordedEvent.Ai(it.start, it.end, it.prompt) } +
-                templates.map { RecordedEvent.ImageMatch(it.first, it.second) } +
-                snapshots.map { RecordedEvent.Snapshot(it.timestamp, it.name, it.region, it.previewPath) }
+                templates.map { RecordedEvent.ImageMatch(it.first, it.second) }
         val sorted = events.sortedBy { it.timestamp }
         val actions = sorted.mapIndexed { i, ev ->
-            // 不再用录制时实测的步间隔，所有节点的「执行前等待」统一默认 500ms（手势时长仍按录制）。
-            val delay = DEFAULT_STEP_DELAY_MS
+            // 不再用录制时实测的步间隔，所有节点的「执行前等待」统一用默认值（手势时长仍按录制）。
+            // 第一个节点前面没有任何动作，无需等待，置 0。
+            val delay = if (i == 0) 0L else ActionDefaults.DEFAULT_CLICK_DELAY_MS
             when (ev) {
                 is RecordedEvent.Touch -> {
                     val t = ev.raw
@@ -1767,23 +1522,11 @@ class OverlayService : LifecycleService() {
                     type = ActionType.IMAGE_MATCH,
                     startX = 0f,
                     startY = 0f,
-                    durationMs = 0L,
-                    delayBeforeMs = delay,
+                    durationMs = ActionDefaults.QUICK_TAP_MS,
+                    // 找图节点要等目标出现，给的等待比普通点击更长；首节点仍不等待。
+                    delayBeforeMs = if (i == 0) 0L else ActionDefaults.DEFAULT_IMAGE_DELAY_MS,
+                    retryCount = ActionDefaults.DEFAULT_IMAGE_DOWN_FALLBACK_PX,
                     templatePath = ev.templatePath,
-                )
-                is RecordedEvent.Snapshot -> Action(
-                    scriptId = 0,
-                    index = i,
-                    type = ActionType.SNAPSHOT,
-                    startX = ev.region.left.toFloat(),
-                    startY = ev.region.top.toFloat(),
-                    endX = ev.region.right.toFloat(),
-                    endY = ev.region.bottom.toFloat(),
-                    durationMs = 0L,
-                    delayBeforeMs = delay,
-                    aiPrompt = ev.name,
-                    // 录制时存下的基准图路径；回放时 SNAPSHOT 直接用它，不再实时重截。
-                    templatePath = ev.previewPath,
                 )
             }
         }
@@ -1829,24 +1572,9 @@ class OverlayService : LifecycleService() {
         data class ImageMatch(override val timestamp: Long, val templatePath: String) : RecordedEvent {
             override val endTimestamp: Long get() = timestamp
         }
-        data class Snapshot(
-            override val timestamp: Long,
-            val name: String,
-            val region: android.graphics.Rect,
-            val previewPath: String?,
-        ) : RecordedEvent {
-            override val endTimestamp: Long get() = timestamp
-        }
     }
 
     private data class RecordedAiStep(val start: Long, val prompt: String, var end: Long)
-
-    private data class RecordedSnapshot(
-        val timestamp: Long,
-        val name: String,
-        val region: android.graphics.Rect,
-        val previewPath: String?,
-    )
 
     /** 记录所选脚本：更新内存状态、持久化 id、刷新面板标签。 */
     private fun setSelectedScript(id: Long, name: String?) {
@@ -2135,8 +1863,6 @@ class OverlayService : LifecycleService() {
         bubbleDeleteBtn = null
         playStopBtn = null
         liveRegionPickBtn = null
-        pendingLiveRegionPickRequestId = null
-        pendingLiveRegionPickScriptId = null
         pendingLiveTemplatePickRequestId = null
         pendingLiveTemplatePickScriptId = null
         positionMaskView = null
@@ -2156,8 +1882,8 @@ class OverlayService : LifecycleService() {
         private const val INJECT_EXTRA_TIMEOUT_MS = 1_500L
         // 注入后留给真实 App 完成跳转/动画的安定时间，再恢复采集。
         private const val INJECT_SETTLE_MS = 120L
-        // 录制生成脚本时，每个节点「执行前等待」统一用这个默认值，不再按录制实测的步间隔。
-        private const val DEFAULT_STEP_DELAY_MS = 500L
+        // 运行时位置/识别框短暂显示，能肉眼确认，又避免高频节点长时间遮罩和重绘。
+        private const val POSITION_MARKER_VISIBLE_MS = 300L
         fun start(ctx: Context) {
             ctx.startForegroundService(Intent(ctx, OverlayService::class.java))
         }

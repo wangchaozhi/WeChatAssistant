@@ -15,15 +15,21 @@ data class Script(
 )
 
 // 注意：Room 用 ordinal 存储 ActionType，新增类型只能追加到末尾，不能插入中间。
+// 删除/重排会改变 ordinal，须配合 DB 版本升级销毁重建（见 AppDatabase v10）。
 enum class ActionType {
-    TAP, SWIPE, LONG_PRESS, WAIT, SCREENSHOT_AI, AI_TAP, PASTE, ENTER, IMAGE_MATCH, WAIT_PAGE_CHANGE,
+    TAP, SWIPE, LONG_PRESS, WAIT, SCREENSHOT_AI, PASTE, ENTER, IMAGE_MATCH, WAIT_PAGE_CHANGE,
     START,            // 图入口节点，执行时 no-op
-    SNAPSHOT,         // 抓当前页面截图存入基准寄存器
-    IF_PAGE_CHANGED,  // 检测快照图像变化；出口 port 0=变了 / 1=没变
     IF_IMAGE_EXISTS,  // 模板图在当前屏幕是否存在；出口 port 0=找到 / 1=没找到。只判断不点击。
-    IF_TEXT_EXISTS,   // aiPrompt 文字是否出现在当前页面控件树；出口 port 0=找到 / 1=没找到。
     LOOP,             // 计数循环：retryCount 为次数。出口 port 0=继续(回循环体) / 1=到次数(往下)。
     STOP,             // 终止整张图的执行（从任意分支提前结束）。
+}
+
+object ActionDefaults {
+    const val QUICK_TAP_MS = 10L
+    const val DEFAULT_CLICK_DELAY_MS = 420L
+    // 找图节点「等目标出现 + 等画面停稳」的总预算（超时）。流式判稳本身要数百毫秒，留足余量。
+    const val DEFAULT_IMAGE_DELAY_MS = 1500L
+    const val DEFAULT_IMAGE_DOWN_FALLBACK_PX = 150
 }
 
 @Entity(

@@ -47,6 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -95,6 +96,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var qwenCachedModels by remember { mutableStateOf(viewModel.cachedModels(AiProvider.DASHSCOPE)) }
     var modelScopeCachedModels by remember { mutableStateOf(viewModel.cachedModels(AiProvider.MODELSCOPE)) }
     var recordEngine by remember { mutableStateOf(viewModel.recordEngine) }
+    var showPlaybackMarker by remember { mutableStateOf(viewModel.showPlaybackMarker) }
 
     LaunchedEffect(Unit) {
         if (!viewModel.settingsModelsFetchedThisRun) {
@@ -171,6 +173,12 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 RecordEngineCard(
                     engine = recordEngine,
                     onEngine = { recordEngine = it; viewModel.recordEngine = it },
+                )
+            }
+            item {
+                PlaybackMarkerCard(
+                    enabled = showPlaybackMarker,
+                    onEnabled = { showPlaybackMarker = it; viewModel.showPlaybackMarker = it },
                 )
             }
             // Wi-Fi ADB 配对卡片只在选了「Wi-Fi ADB 录制」时显示——悬浮层录制用不到它。
@@ -488,6 +496,33 @@ private fun RecordEngineCard(engine: String, onEngine: (String) -> Unit) {
 }
 
 @Composable
+private fun PlaybackMarkerCard(enabled: Boolean, onEnabled: (Boolean) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Row(
+            Modifier.padding(16.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SettingsIcon(Icons.Filled.TouchApp)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text("回放点击标记", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "回放时在屏幕上闪现点击/滑动/找图位置，默认开启",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Switch(checked = enabled, onCheckedChange = onEnabled)
+        }
+    }
+}
+
+@Composable
 private fun AiImageCard(side: Int, onSide: (Int) -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -743,7 +778,7 @@ private fun DebugLogCard() {
                 Column(Modifier.weight(1f)) {
                     Text("调试日志", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text(
-                        "记录截图、AI、快照对比与脚本运行信息 · ${formatBytes(logSize)}",
+                        "记录截图、AI、图像识别与脚本运行信息 · ${formatBytes(logSize)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

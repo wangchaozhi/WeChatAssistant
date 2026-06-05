@@ -64,9 +64,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.wangchaozhi.wechatassistant.data.model.Action
+import com.wangchaozhi.wechatassistant.data.model.ActionDefaults
 import com.wangchaozhi.wechatassistant.data.model.ActionType
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
+import com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
 import com.wangchaozhi.wechatassistant.service.ServiceBus
 import kotlin.math.min
 
@@ -214,7 +216,7 @@ fun ScriptEditorScreen(
                         index = actions.size,
                         type = type,
                         startX = 0f, startY = 0f,
-                        durationMs = if (type == ActionType.AI_TAP) 80L else 0L,
+                        durationMs = 0L,
                         delayBeforeMs = delayMs,
                         aiPrompt = prompt,
                     )
@@ -238,6 +240,10 @@ fun ScriptEditorScreen(
                     editingIndex = null
                     launchTemplatePicker()
                 },
+                onClearTemplate = {
+                    // 清空模板，下次「选图/框选」即为重选（替换）。region 留给后续框选覆盖。
+                    actions[ei] = actions[ei].copy(templatePath = null)
+                },
                 fetchModels = { viewModel.fetchModels(it) },
                 cachedModels = { viewModel.cachedModels(it) },
             )
@@ -253,18 +259,25 @@ fun ScriptEditorScreen(
                     pendingRecaptureIndex = null
                 },
                 onConfirm = { bitmap ->
-                    val path = com.wangchaozhi.wechatassistant.feature.match
-                        .TemplateMatchUseCase.saveTemplate(context, bitmap)
+                    val path = TemplateMatchUseCase.saveTemplate(context, bitmap)
                     val idx = pendingRecaptureIndex
                     if (idx != null && idx in actions.indices && path != null) {
-                        actions[idx] = actions[idx].copy(templatePath = path)
+                        actions[idx] = actions[idx].copy(
+                            templatePath = TemplateMatchUseCase.appendTemplatePath(
+                                actions[idx].templatePath,
+                                path,
+                            )
+                        )
                     } else if (idx == null && path != null) {
                         actions += Action(
                             scriptId = scriptId,
                             index = actions.size,
                             type = ActionType.IMAGE_MATCH,
                             startX = 0f, startY = 0f,
-                            delayBeforeMs = 500L,
+                            durationMs = ActionDefaults.QUICK_TAP_MS,
+                            delayBeforeMs = ActionDefaults.DEFAULT_CLICK_DELAY_MS,
+                            retryCount = ActionDefaults.DEFAULT_IMAGE_DOWN_FALLBACK_PX,
+                            matchThreshold = 0.70f,
                             templatePath = path,
                         )
                         editingIndex = actions.size - 1
@@ -373,8 +386,9 @@ private fun ActionRow(
 
 @Composable
 private fun TemplateThumb(path: String?, size: androidx.compose.ui.unit.Dp) {
-    val image = remember(path) {
-        path?.let { runCatching { android.graphics.BitmapFactory.decodeFile(it)?.asImageBitmap() }.getOrNull() }
+    val firstPath = remember(path) { TemplateMatchUseCase.splitTemplatePaths(path).firstOrNull() }
+    val image = remember(firstPath) {
+        firstPath?.let { runCatching { android.graphics.BitmapFactory.decodeFile(it)?.asImageBitmap() }.getOrNull() }
     }
     Box(
         Modifier
@@ -452,7 +466,9 @@ private fun AddActionMenu(
 internal fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Action = when (type) {
     ActionType.TAP -> Action(
         scriptId = scriptId, index = index, type = type,
-        startX = 0f, startY = 0f, durationMs = 80L,
+        startX = 0f, startY = 0f,
+        durationMs = ActionDefaults.QUICK_TAP_MS,
+        delayBeforeMs = ActionDefaults.DEFAULT_CLICK_DELAY_MS,
     )
     ActionType.LONG_PRESS -> Action(
         scriptId = scriptId, index = index, type = type,
@@ -466,9 +482,17 @@ internal fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Act
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 1000L,
     )
-    ActionType.SCREENSHOT_AI, ActionType.AI_TAP, ActionType.IMAGE_MATCH -> Action(
+    ActionType.SCREENSHOT_AI -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L,
+    )
+    ActionType.IMAGE_MATCH -> Action(
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f,
+        durationMs = ActionDefaults.QUICK_TAP_MS,
+        delayBeforeMs = ActionDefaults.DEFAULT_IMAGE_DELAY_MS,
+        retryCount = ActionDefaults.DEFAULT_IMAGE_DOWN_FALLBACK_PX,
+        matchThreshold = 0.70f,
     )
     ActionType.PASTE, ActionType.ENTER -> Action(
         scriptId = scriptId, index = index, type = type,
@@ -482,21 +506,12 @@ internal fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Act
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 0L,
     )
-    ActionType.SNAPSHOT -> Action(
-        scriptId = scriptId, index = index, type = type,
-        startX = 0f, startY = 0f, durationMs = 0L, aiPrompt = "快照1",
-    )
-    ActionType.IF_PAGE_CHANGED -> Action(
-        scriptId = scriptId, index = index, type = type,
-        startX = 0f, startY = 0f, durationMs = 0L, aiPrompt = "快照1", matchThreshold = 0.95f,
-    )
     ActionType.IF_IMAGE_EXISTS -> Action(
         scriptId = scriptId, index = index, type = type,
-        startX = 0f, startY = 0f, durationMs = 0L,
-    )
-    ActionType.IF_TEXT_EXISTS -> Action(
-        scriptId = scriptId, index = index, type = type,
-        startX = 0f, startY = 0f, durationMs = 0L, aiPrompt = "",
+        startX = 0f, startY = 0f,
+        durationMs = 0L,
+        retryCount = ActionDefaults.DEFAULT_IMAGE_DOWN_FALLBACK_PX,
+        matchThreshold = 0.70f,
     )
     ActionType.LOOP -> Action(
         scriptId = scriptId, index = index, type = type,
@@ -514,16 +529,12 @@ internal fun typeLabel(t: ActionType): String = when (t) {
     ActionType.LONG_PRESS -> "长按"
     ActionType.WAIT -> "等待"
     ActionType.SCREENSHOT_AI -> "AI 截图问答"
-    ActionType.AI_TAP -> "AI 找图点击"
     ActionType.IMAGE_MATCH -> "选图点击"
     ActionType.PASTE -> "粘贴"
     ActionType.ENTER -> "回车"
     ActionType.WAIT_PAGE_CHANGE -> "等待页面变化"
     ActionType.START -> "开始"
-    ActionType.SNAPSHOT -> "快照"
-    ActionType.IF_PAGE_CHANGED -> "条件：检测快照变化"
     ActionType.IF_IMAGE_EXISTS -> "条件：图像是否存在"
-    ActionType.IF_TEXT_EXISTS -> "条件：文字是否存在"
     ActionType.LOOP -> "循环 N 次"
     ActionType.STOP -> "停止"
 }
@@ -535,22 +546,35 @@ private fun describe(a: Action): String = when (a.type) {
         "(${a.startX.toInt()},${a.startY.toInt()})→(${a.endX.toInt()},${a.endY.toInt()}) ${a.durationMs}ms"
     ActionType.WAIT -> "等待 ${a.durationMs}ms" + if (a.randomExtraMs > 0) " (+0~${a.randomExtraMs}ms)" else ""
     ActionType.SCREENSHOT_AI -> "prompt: \"${a.aiPrompt?.take(40) ?: ""}\""
-    ActionType.AI_TAP -> "目标: \"${a.aiPrompt?.take(40) ?: ""}\""
     ActionType.IMAGE_MATCH ->
-        "${if (a.templatePath != null) "找图点击" else "⚠ 未设模板"} · 阈值 ${"%.2f".format(a.matchThreshold)} · 延迟 ${a.delayBeforeMs}ms"
+        "${if (templateCount(a.templatePath) > 0) "找图点击(${templateCount(a.templatePath)}张)" else "⚠ 未设模板"} · 精度 ${imagePrecision(a.matchThreshold)} · 延迟 ${a.delayBeforeMs}ms"
     ActionType.PASTE -> "粘贴到当前焦点输入框 · 延迟 ${a.delayBeforeMs}ms"
     ActionType.ENTER -> "回车 (IME action 或换行) · 延迟 ${a.delayBeforeMs}ms"
     ActionType.WAIT_PAGE_CHANGE ->
         "页面没变就重复前 ${a.repeatPrevSteps} 步 · 最多 ${a.retryCount} 次 · 间隔 ${a.durationMs}ms"
     ActionType.START -> "图入口"
-    ActionType.SNAPSHOT -> "记录当前页面为基准"
-    ActionType.IF_PAGE_CHANGED ->
-        "检测到快照变化走「是」，否则走「否」 · 阈值 ${"%.2f".format(a.matchThreshold)}"
     ActionType.IF_IMAGE_EXISTS ->
-        "${if (a.templatePath != null) "找到图" else "⚠ 未设模板"} 走「有」，否则走「无」 · 阈值 ${"%.2f".format(a.matchThreshold)}"
-    ActionType.IF_TEXT_EXISTS -> "出现文字「${a.aiPrompt?.take(20) ?: ""}」走「有」，否则走「无」"
+        "${if (templateCount(a.templatePath) > 0) "区域找图(${templateCount(a.templatePath)}张)" else "⚠ 未设模板"} 走「有」，否则走「无」 · 精度 ${imagePrecision(a.matchThreshold)}"
     ActionType.LOOP -> "循环 ${a.retryCount} 次 · 继续走「环」，到次数走「完」"
     ActionType.STOP -> "终止整张图的执行"
+}
+
+private fun templateCount(path: String?): Int = TemplateMatchUseCase.splitTemplatePaths(path).size
+
+private fun isImageRecognition(type: ActionType): Boolean =
+    type == ActionType.IMAGE_MATCH || type == ActionType.IF_IMAGE_EXISTS
+
+private fun imagePrecision(threshold: Float): Int = TemplateMatchUseCase.thresholdToPrecision(threshold)
+
+private fun imagePrecisionText(threshold: Float): String = imagePrecision(threshold).toString()
+
+private fun imagePrecisionInputToThreshold(raw: String, fallback: Float): Float {
+    val value = raw.toFloatOrNull() ?: return fallback
+    return if (value <= 1f) {
+        value.coerceIn(0f, 1f)
+    } else {
+        TemplateMatchUseCase.precisionToThreshold(value.toInt())
+    }
 }
 
 @Composable
@@ -561,7 +585,7 @@ private fun AddAiStepDialog(
 ) {
     var type by remember { mutableStateOf(ActionType.SCREENSHOT_AI) }
     var prompt by remember { mutableStateOf(defaultPrompt) }
-    var delayText by remember { mutableStateOf("500") }
+    var delayText by remember { mutableStateOf(ActionDefaults.DEFAULT_CLICK_DELAY_MS.toString()) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("插入 AI 步骤") },
@@ -573,19 +597,12 @@ private fun AddAiStepDialog(
                         onClick = { type = ActionType.SCREENSHOT_AI },
                         label = { Text("截图问答") },
                     )
-                    FilterChip(
-                        selected = type == ActionType.AI_TAP,
-                        onClick = { type = ActionType.AI_TAP },
-                        label = { Text("找图点击") },
-                    )
                 }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = prompt,
                     onValueChange = { prompt = it },
-                    label = {
-                        Text(if (type == ActionType.AI_TAP) "要点击的目标（如：登录按钮）" else "Prompt")
-                    },
+                    label = { Text("Prompt") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(8.dp))
@@ -613,7 +630,7 @@ internal fun EditActionDialog(
     onDismiss: () -> Unit,
     onConfirm: (Action) -> Unit,
     onRecaptureTemplate: () -> Unit = {},
-    onPickRegion: () -> Unit = {},
+    onClearTemplate: () -> Unit = {},
     fetchModels: suspend (AiProvider) -> Result<List<String>> = { Result.success(it.models) },
     cachedModels: (AiProvider) -> List<String> = { emptyList() },
 ) {
@@ -625,11 +642,21 @@ internal fun EditActionDialog(
     var delay by remember { mutableStateOf(action.delayBeforeMs.toString()) }
     var randomExtra by remember { mutableStateOf(action.randomExtraMs.toString()) }
     var aiPrompt by remember { mutableStateOf(action.aiPrompt.orEmpty()) }
-    var threshold by remember { mutableStateOf(action.matchThreshold.toString()) }
-    var retry by remember { mutableStateOf(action.retryCount.toString()) }
+    var threshold by remember {
+        mutableStateOf(
+            if (isImageRecognition(action.type)) imagePrecisionText(action.matchThreshold)
+            else action.matchThreshold.toString()
+        )
+    }
+    var retry by remember {
+        mutableStateOf(
+            if (isImageRecognition(action.type) && action.retryCount == 10)
+                ActionDefaults.DEFAULT_IMAGE_DOWN_FALLBACK_PX.toString()
+            else
+                action.retryCount.toString()
+        )
+    }
     var repeatSteps by remember { mutableStateOf(action.repeatPrevSteps.toString()) }
-    // IF_PAGE_CHANGED 复用 templatePath 存「快照B」名称。
-    var snapshotB by remember { mutableStateOf(action.templatePath.orEmpty()) }
     var alias by remember { mutableStateOf(action.alias.orEmpty()) }
     // AI 节点：供应商（null=跟随全局）与具体模型。
     var aiProvider by remember { mutableStateOf(AiProvider.parse(action.aiProvider)) }
@@ -715,11 +742,10 @@ internal fun EditActionDialog(
                             Text("显示位置")
                         }
                     }
-                    ActionType.WAIT, ActionType.SCREENSHOT_AI, ActionType.AI_TAP,
+                    ActionType.WAIT, ActionType.SCREENSHOT_AI,
                     ActionType.IMAGE_MATCH, ActionType.PASTE, ActionType.ENTER,
                     ActionType.WAIT_PAGE_CHANGE,
-                    ActionType.START, ActionType.SNAPSHOT, ActionType.IF_PAGE_CHANGED,
-                    ActionType.IF_IMAGE_EXISTS, ActionType.IF_TEXT_EXISTS,
+                    ActionType.START, ActionType.IF_IMAGE_EXISTS,
                     ActionType.LOOP, ActionType.STOP -> { /* no coords */ }
                 }
                 if (action.type == ActionType.WAIT_PAGE_CHANGE) {
@@ -735,15 +761,16 @@ internal fun EditActionDialog(
                         action.type != ActionType.IMAGE_MATCH &&
                         action.type != ActionType.PASTE &&
                         action.type != ActionType.ENTER &&
-                        action.type != ActionType.IF_IMAGE_EXISTS &&
-                        action.type != ActionType.IF_TEXT_EXISTS &&
                         action.type != ActionType.LOOP &&
                         action.type != ActionType.STOP
                     ) {
                         NumField(
                             duration,
                             { duration = it },
-                            if (action.type == ActionType.IF_PAGE_CHANGED) "快照检测时长 (ms，0=单次检测)" else "持续 (ms)",
+                            when (action.type) {
+                                ActionType.IF_IMAGE_EXISTS -> "等画面稳定再判 (ms，0=单次判定)"
+                                else -> "持续 (ms)"
+                            },
                             Modifier.fillMaxWidth(),
                         )
                     }
@@ -751,17 +778,17 @@ internal fun EditActionDialog(
                         Spacer(Modifier.height(6.dp))
                         NumField(randomExtra, { randomExtra = it }, "随机附加等待 (0~N ms，0=不抖动)", Modifier.fillMaxWidth())
                     }
-                    Spacer(Modifier.height(6.dp))
-                    NumField(delay, { delay = it }, "执行前等待 (ms)", Modifier.fillMaxWidth())
+                    if (action.type != ActionType.IF_IMAGE_EXISTS) {
+                        Spacer(Modifier.height(6.dp))
+                        NumField(delay, { delay = it }, "执行前等待 (ms)", Modifier.fillMaxWidth())
+                    }
                 }
-                if (action.type == ActionType.SCREENSHOT_AI || action.type == ActionType.AI_TAP) {
+                if (action.type == ActionType.SCREENSHOT_AI) {
                     Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
                         value = aiPrompt,
                         onValueChange = { aiPrompt = it },
-                        label = {
-                            Text(if (action.type == ActionType.AI_TAP) "目标描述" else "Prompt")
-                        },
+                        label = { Text("Prompt") },
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(6.dp))
@@ -780,75 +807,18 @@ internal fun EditActionDialog(
                         onModel = { aiModel = it },
                     )
                 }
-                if (action.type == ActionType.SNAPSHOT) {
-                    Spacer(Modifier.height(6.dp))
-                    OutlinedTextField(
-                        value = aiPrompt,
-                        onValueChange = { aiPrompt = it },
-                        label = { Text("快照名称（条件节点按此名称对比）") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    val hasRegion = action.endX > action.startX && action.endY > action.startY
-                    Text(
-                        if (hasRegion)
-                            "范围：(${action.startX.toInt()},${action.startY.toInt()})-(${action.endX.toInt()},${action.endY.toInt()})"
-                        else "范围：整页",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TemplateThumb(action.templatePath, 64.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            if (action.templatePath != null) "快照范围预览" else "尚未现场框选预览",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    if (hasRegion) {
-                        OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.fillMaxWidth()) {
-                            Text("显示位置")
-                        }
-                        Spacer(Modifier.height(4.dp))
-                    }
-                    OutlinedButton(onClick = onPickRegion, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (hasRegion) "重选屏幕范围" else "选屏幕范围（截图框选）")
-                    }
-                }
-                if (action.type == ActionType.IF_PAGE_CHANGED) {
-                    Spacer(Modifier.height(6.dp))
-                    OutlinedTextField(
-                        value = aiPrompt,
-                        onValueChange = { aiPrompt = it },
-                        label = { Text("快照 A 名称") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    OutlinedTextField(
-                        value = snapshotB,
-                        onValueChange = { snapshotB = it },
-                        label = { Text("快照 B 名称（留空＝与当前实时页面比）") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    NumField(threshold, { threshold = it }, "快照变化阈值 (0~1，越大越敏感)", Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(4.dp))
-                    Text("留空 B＝在检测时长内持续对比快照 A 与实时页面，检测到快照变化立刻走「是」，超时走「否」。两个快照都填＝比较 A 与 B 是否不同。",
-                        style = MaterialTheme.typography.bodySmall)
-                }
                 if (action.type == ActionType.IMAGE_MATCH) {
+                    val count = templateCount(action.templatePath)
                     Spacer(Modifier.height(6.dp))
-                    NumField(threshold, { threshold = it }, "匹配阈值 (0~1，越大越严格)", Modifier.fillMaxWidth())
+                    NumField(threshold, { threshold = it }, "识别精度 (0~100，越大越严格)", Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    NumField(retry, { retry = it }, "下方容错 (px，0=关闭)", Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         TemplateThumb(action.templatePath, 64.dp)
                         Spacer(Modifier.width(10.dp))
                         Text(
-                            if (action.templatePath != null) "点击的目标（匹配到就点它）" else "⚠ 尚未设置模板图",
+                            if (count > 0) "点击目标模板 · 共 ${count} 张（命中任一张就点击）" else "⚠ 尚未设置模板图",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -866,18 +836,26 @@ internal fun EditActionDialog(
                         Spacer(Modifier.height(6.dp))
                     }
                     OutlinedButton(onClick = onRecaptureTemplate, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (action.templatePath != null) "重新选图 / 截取模板" else "选图 / 截取模板")
+                        Text(if (count > 0) "继续添加模板" else "选图 / 截取模板")
+                    }
+                    if (count > 0) {
+                        TextButton(onClick = onClearTemplate, modifier = Modifier.fillMaxWidth()) {
+                            Text("清空模板（重选）")
+                        }
                     }
                 }
                 if (action.type == ActionType.IF_IMAGE_EXISTS) {
+                    val count = templateCount(action.templatePath)
                     Spacer(Modifier.height(6.dp))
-                    NumField(threshold, { threshold = it }, "匹配阈值 (0~1，越大越严格)", Modifier.fillMaxWidth())
+                    NumField(threshold, { threshold = it }, "识别精度 (0~100，越大越严格)", Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    NumField(retry, { retry = it }, "下方容错 (px，0=关闭)", Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         TemplateThumb(action.templatePath, 64.dp)
                         Spacer(Modifier.width(10.dp))
                         Text(
-                            if (action.templatePath != null) "找到此图走「有」，否则走「无」（只判断不点击）" else "⚠ 尚未设置模板图",
+                            if (count > 0) "搜索模板 · 共 ${count} 张（找到任一张走「有」）" else "⚠ 尚未设置模板图",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -885,7 +863,7 @@ internal fun EditActionDialog(
                     val hasRegion = action.endX > action.startX && action.endY > action.startY
                     if (hasRegion) {
                         Text(
-                            "位置：(${action.startX.toInt()},${action.startY.toInt()})-(${action.endX.toInt()},${action.endY.toInt()})",
+                            "搜索范围：(${action.startX.toInt()},${action.startY.toInt()})-(${action.endX.toInt()},${action.endY.toInt()})",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Spacer(Modifier.height(4.dp))
@@ -895,21 +873,13 @@ internal fun EditActionDialog(
                         Spacer(Modifier.height(6.dp))
                     }
                     OutlinedButton(onClick = onRecaptureTemplate, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (action.templatePath != null) "重新选图 / 截取模板" else "选图 / 截取模板")
+                        Text(if (count > 0) "继续添加模板" else "选图 / 截取模板")
                     }
-                }
-                if (action.type == ActionType.IF_TEXT_EXISTS) {
-                    Spacer(Modifier.height(6.dp))
-                    OutlinedTextField(
-                        value = aiPrompt,
-                        onValueChange = { aiPrompt = it },
-                        label = { Text("要查找的文字（页面出现即走「有」）") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text("在当前页面控件树里按「包含、忽略大小写」匹配；找到走「有」、没找到走「无」。",
-                        style = MaterialTheme.typography.bodySmall)
+                    if (count > 0) {
+                        TextButton(onClick = onClearTemplate, modifier = Modifier.fillMaxWidth()) {
+                            Text("清空模板（重选）")
+                        }
+                    }
                 }
                 if (action.type == ActionType.LOOP) {
                     Spacer(Modifier.height(6.dp))
@@ -934,17 +904,21 @@ internal fun EditActionDialog(
                         endX = endX.toFloatOrNull() ?: action.endX,
                         endY = endY.toFloatOrNull() ?: action.endY,
                         durationMs = duration.toLongOrNull() ?: action.durationMs,
-                        delayBeforeMs = delay.toLongOrNull() ?: action.delayBeforeMs,
+                        delayBeforeMs = if (action.type == ActionType.IF_IMAGE_EXISTS) {
+                            0L
+                        } else {
+                            delay.toLongOrNull() ?: action.delayBeforeMs
+                        },
                         randomExtraMs = randomExtra.toLongOrNull()?.coerceAtLeast(0L) ?: action.randomExtraMs,
                         aiPrompt = aiPrompt.ifBlank { null },
-                        matchThreshold = threshold.toFloatOrNull()?.coerceIn(0.1f, 1f)
-                            ?: action.matchThreshold,
+                        matchThreshold = if (isImageRecognition(action.type))
+                            imagePrecisionInputToThreshold(threshold, action.matchThreshold)
+                        else
+                            threshold.toFloatOrNull()?.coerceIn(0.1f, 1f) ?: action.matchThreshold,
                         retryCount = retry.toIntOrNull()?.coerceAtLeast(0) ?: action.retryCount,
                         repeatPrevSteps = repeatSteps.toIntOrNull()?.coerceAtLeast(1)
                             ?: action.repeatPrevSteps,
-                        // IF 节点用 templatePath 存快照B 名称；其它类型保持原 templatePath。
-                        templatePath = if (action.type == ActionType.IF_PAGE_CHANGED)
-                            snapshotB.ifBlank { null } else action.templatePath,
+                        templatePath = action.templatePath,
                         alias = alias.ifBlank { null },
                         aiProvider = aiProvider?.name,
                         aiModel = if (aiProvider == null) null else aiModel.ifBlank { null },

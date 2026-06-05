@@ -109,6 +109,10 @@ class MainViewModel(
         get() = settings.recordEngine
         set(value) { settings.recordEngine = value }
 
+    var showPlaybackMarker: Boolean
+        get() = settings.showPlaybackMarker
+        set(value) { settings.showPlaybackMarker = value }
+
     val wifiAdbState: StateFlow<WifiAdbManager.Status> = WifiAdbManager.state
 
     fun saveWifiAdbConfig(host: String, pairingPort: Int, connectPort: Int) {

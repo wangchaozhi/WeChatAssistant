@@ -19,7 +19,9 @@ class Converters {
 
 @Database(
     entities = [Script::class, Action::class, AiAnswer::class, Edge::class],
-    version = 9,
+    // v10：移除 AI_TAP / SNAPSHOT / IF_PAGE_CHANGED / IF_TEXT_EXISTS 四种节点，ActionType 序号重排。
+    // 不提供 9→10 迁移，靠 fallbackToDestructiveMigration 销毁重建（旧脚本数据按需求一并清空）。
+    version = 10,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)

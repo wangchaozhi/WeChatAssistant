@@ -100,6 +100,11 @@ class SettingsRepository(context: Context) {
         get() = prefs.getLong(KEY_SELECTED_SCRIPT, -1L)
         set(value) = prefs.edit().putLong(KEY_SELECTED_SCRIPT, value).apply()
 
+    // 回放时是否在屏幕上闪现点击/滑动/找图的位置标记。默认开，可在设置里关闭。
+    var showPlaybackMarker: Boolean
+        get() = prefs.getBoolean(KEY_SHOW_PLAYBACK_MARKER, true)
+        set(value) = prefs.edit().putBoolean(KEY_SHOW_PLAYBACK_MARKER, value).apply()
+
     companion object {
         private const val KEY_QWEN_API = "qwen_api_key"
         private const val KEY_DEFAULT_PROMPT = "default_prompt"
@@ -118,6 +123,7 @@ class SettingsRepository(context: Context) {
         const val RECORD_ENGINE_OVERLAY = "OVERLAY"
         const val RECORD_ENGINE_WIFI_ADB = "WIFI_ADB"
         private const val KEY_SELECTED_SCRIPT = "overlay_selected_script_id"
+        private const val KEY_SHOW_PLAYBACK_MARKER = "show_playback_marker"
         const val DEFAULT_MODEL = "qwen3.5-omni-flash"
         const val DEFAULT_MS_MODEL = "Qwen/Qwen3.5-122B-A10B"
         const val DEFAULT_PROVIDER = "DASHSCOPE"

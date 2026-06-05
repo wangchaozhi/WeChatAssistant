@@ -156,7 +156,7 @@ fun RegionBandDialog(
     Dialog(onDismiss, DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = Color(0xF2000000)) {
             Column(Modifier.fillMaxSize().padding(12.dp)) {
-                Text("拖动上下两条横线，选中区间即快照范围（左右满宽）", color = Color.White)
+                Text("拖动上下两条横线，选中区间即截取范围（左右满宽）", color = Color.White)
                 Spacer(Modifier.height(8.dp))
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

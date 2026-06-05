@@ -27,6 +27,6 @@ data class Edge(
     val scriptId: Long,
     val fromActionId: Long,
     val toActionId: Long,
-    // 普通节点恒 0；IF_PAGE_CHANGED 节点 0=变了(true) / 1=没变(false)。
+    // 普通节点恒 0；条件/循环节点按各自出口含义区分 0/1。
     val fromPort: Int = 0,
 )
