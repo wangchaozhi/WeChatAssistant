@@ -1,10 +1,14 @@
 package com.wangchaozhi.wechatassistant.ui
 
 import android.content.Intent
-import android.graphics.BitmapFactory
+import android.graphics.Bitmap
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -57,11 +62,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -71,6 +82,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
@@ -79,6 +92,9 @@ import com.wangchaozhi.wechatassistant.service.CaptureForegroundService
 import com.wangchaozhi.wechatassistant.service.ServiceBus
 import com.wangchaozhi.wechatassistant.util.copyToClipboard
 import com.wangchaozhi.wechatassistant.util.WifiAdbNotification
+import com.wangchaozhi.wechatassistant.util.decodeSampledBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -875,28 +891,27 @@ private fun DebugImagesDialog(
     onClear: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var preview by remember { mutableStateOf<File?>(null) }
     AlertDialog(
         shape = RoundedCornerShape(8.dp),
         onDismissRequest = onDismiss,
         title = { Text("调试图片") },
         text = {
-            val scroll = rememberScrollState()
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .height(520.dp)
-                    .verticalScroll(scroll),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (images.isEmpty()) {
-                    Text(
-                        "暂无调试图片。运行脚本后会生成 dbg_snap_* 和 dbg_now_*。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    images.forEach { file ->
-                        DebugImageItem(file)
+            if (images.isEmpty()) {
+                Text(
+                    "暂无调试图片。运行脚本后会生成 dbg_snap_* 和 dbg_now_*。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LazyColumn(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(520.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(images, key = { it.absolutePath }) { file ->
+                        DebugImageItem(file, onClick = { preview = file })
                     }
                 }
             }
@@ -914,32 +929,92 @@ private fun DebugImagesDialog(
             }
         },
     )
+
+    preview?.let { file ->
+        DebugImageFullscreen(file = file, onDismiss = { preview = null })
+    }
 }
 
 @Composable
-private fun DebugImageItem(file: File) {
-    val bitmap = remember(file.absolutePath, file.lastModified()) {
-        BitmapFactory.decodeFile(file.absolutePath)
+private fun DebugImageItem(file: File, onClick: () -> Unit) {
+    // 列表缩略图按屏幕宽度降采样解码，且放到 IO 线程，避免阻塞 UI / OOM。
+    val bitmap by produceState<Bitmap?>(null, file.absolutePath, file.lastModified()) {
+        value = withContext(Dispatchers.IO) {
+            decodeSampledBitmap(file.absolutePath, reqMaxSide = 720)
+        }
     }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
             "${file.name} · ${formatBytes(file.length())}",
             style = MaterialTheme.typography.labelMedium,
         )
-        if (bitmap != null) {
+        bitmap?.let { bmp ->
             Image(
-                bitmap = bitmap.asImageBitmap(),
+                bitmap = bmp.asImageBitmap(),
                 contentDescription = file.name,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp)),
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onClick),
             )
-        } else {
-            Text(
-                "图片无法解码",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
+        }
+    }
+}
+
+/** 点击调试图后的全屏预览，支持双指缩放 / 拖动 / 双击复位。 */
+@Composable
+private fun DebugImageFullscreen(file: File, onDismiss: () -> Unit) {
+    val bitmap by produceState<Bitmap?>(null, file.absolutePath) {
+        value = withContext(Dispatchers.IO) {
+            decodeSampledBitmap(file.absolutePath, reqMaxSide = 1920)
+        }
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnClickOutside = true,
+            dismissOnBackPress = true,
+        ),
+    ) {
+        var scale by remember { mutableStateOf(1f) }
+        var offset by remember { mutableStateOf(Offset.Zero) }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { onDismiss() },
+                        onDoubleTap = {
+                            scale = 1f
+                            offset = Offset.Zero
+                        },
+                    )
+                }
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 6f)
+                        offset = if (scale <= 1f) Offset.Zero else offset + pan
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            bitmap?.let { bmp ->
+                Image(
+                    bitmap = bmp.asImageBitmap(),
+                    contentDescription = file.name,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y,
+                        ),
+                    contentScale = ContentScale.Fit,
+                )
+            }
         }
     }
 }
