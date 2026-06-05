@@ -322,6 +322,9 @@ class ClickerAccessibilityService : AccessibilityService() {
                     // BigClicker 风格的图片识别：在搜索区域内滑动模板做 matchTemplate。
                     // region 为空时退回整屏搜索；有 region 时只在该区域附近找，速度更快也更稳。
                     val paths = TemplateMatchUseCase.splitTemplatePaths(node.templatePath)
+                        .firstOrNull()
+                        ?.let { listOf(it) }
+                        .orEmpty()
                     val region = regionOf(node)
                     // 设了「等稳定时长」(durationMs>0)：先等搜索区域真正稳定再判，
                     // 避免刷新/列表挪动(如刚发完朋友圈)时拿中间帧误判 found 抖动。0=保持单次瞬时判定。
@@ -347,7 +350,7 @@ class ClickerAccessibilityService : AccessibilityService() {
                         "IF_IMAGE_EXISTS(matchTemplate) precision=${TemplateMatchUseCase.thresholdToPrecision(node.matchThreshold)} " +
                             "thr=${"%.2f".format(node.matchThreshold)} " +
                             "score=${match?.score?.let { "%.3f".format(it) } ?: "-"} " +
-                            "tpl=${match?.index?.plus(1) ?: "-"} count=${paths.size} " +
+                            "tpl=${match?.index?.plus(1) ?: "-"} " +
                             "found=$found center=${match?.point} region=$region dbg=$dbg.png " +
                             "err=${result.exceptionOrNull()?.message.orEmpty()}"
                     )
@@ -576,12 +579,43 @@ class ClickerAccessibilityService : AccessibilityService() {
             }
             ActionType.IMAGE_MATCH -> {
                 val paths = TemplateMatchUseCase.splitTemplatePaths(action.templatePath)
-                if (paths.isEmpty()) return
+                if (paths.isEmpty()) {
+                    App.from(this@ClickerAccessibilityService).appendLog(
+                        "IMAGE_MATCH skipped: 未设置模板 id=${action.id} idx=${action.index}"
+                    )
+                    return
+                }
                 val region = regionOf(action)
                 // 等目标稳定再点：在「执行前等待」这段预算内反复截图匹配，
                 // 直到目标出现且连续两帧几乎不动（画面静止）才点击，避免点到动画/过渡中间帧。
                 val budgetMs = (action.delayBeforeMs / speed).toLong().coerceAtLeast(0)
-                val match = locateStable(paths, action, region, budgetMs) ?: return
+                val match = if (budgetMs > 0L) {
+                    locateStable(paths, action, region, budgetMs)
+                } else {
+                    val dbg = "dbg_imgclick_${System.currentTimeMillis()}"
+                    App.from(this@ClickerAccessibilityService).templateMatch
+                        .locateAny(
+                            paths,
+                            action.matchThreshold,
+                            region,
+                            dbg,
+                            imageDownFallbackPx(action),
+                        )
+                        .getOrNull()
+                }
+                if (match == null) {
+                    App.from(this@ClickerAccessibilityService).appendLog(
+                        "IMAGE_MATCH not found id=${action.id} idx=${action.index} " +
+                            "precision=${TemplateMatchUseCase.thresholdToPrecision(action.matchThreshold)} " +
+                            "thr=${"%.2f".format(action.matchThreshold)} count=${paths.size} region=$region"
+                    )
+                    return
+                }
+                App.from(this@ClickerAccessibilityService).appendLog(
+                    "IMAGE_MATCH click id=${action.id} idx=${action.index} " +
+                        "score=${"%.3f".format(match.score)} tpl=${match.index + 1}/${paths.size} " +
+                        "center=${match.point} region=$region"
+                )
                 flashImageResult(match.box, region, "点击目标")
                 performGesture(
                     action.copy(

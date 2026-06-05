@@ -54,7 +54,7 @@ class TemplateMatchUseCase(
     /**
      * 在当前屏幕里找模板图。
      * [region] 非空时只在该区域(屏幕坐标，带少量余量)里匹配——模板本就是从这块截的，直接比这一小块，
-     * 比全屏 matchTemplate 快得多；region 为空(老脚本/相册选图没存位置)才退回全屏搜。
+     * 比全屏 matchTemplate 快得多；region 为空(老脚本没存位置)才退回全屏搜。
      * [debugName] 非空时把截屏连同命中框/分数存到 filesDir/<debugName>.png，便于 adb 核对。
      */
     suspend fun locate(

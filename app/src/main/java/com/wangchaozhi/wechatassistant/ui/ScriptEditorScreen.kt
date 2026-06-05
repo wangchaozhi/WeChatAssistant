@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -84,32 +85,7 @@ fun ScriptEditorScreen(
     var loaded by remember { mutableStateOf(false) }
     var showAddAiDialog by remember { mutableStateOf(false) }
     var editingIndex by remember { mutableStateOf<Int?>(null) }
-    // 模板来源：从相册选一张「系统截图」（与运行分辨率一致才能匹配），再裁剪。
-    // pendingForNew=新增一步；pendingRecaptureIndex!=null=替换已有步骤的模板。
-    var pendingForNew by remember { mutableStateOf(false) }
-    var pendingRecaptureIndex by remember { mutableStateOf<Int?>(null) }
-    var cropSource by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    val context = androidx.compose.ui.platform.LocalContext.current
-
-    val pickImage = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        val bmp = uri?.let { decodeBitmap(context, it) }
-        if (bmp != null) {
-            cropSource = bmp
-        } else {
-            pendingForNew = false
-            pendingRecaptureIndex = null
-        }
-    }
-    fun launchTemplatePicker() {
-        pickImage.launch(
-            androidx.activity.result.PickVisualMediaRequest(
-                androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
-            )
-        )
-    }
-
+    val context = LocalContext.current
     LaunchedEffect(scriptId) {
         val data = viewModel.loadScript(scriptId)
         if (data != null) {
@@ -162,11 +138,6 @@ fun ScriptEditorScreen(
                             editingIndex = actions.size - 1
                         },
                         onAddAi = { showAddAiDialog = true },
-                        onAddImageMatch = {
-                            pendingForNew = true
-                            pendingRecaptureIndex = null
-                            launchTemplatePicker()
-                        },
                     )
                 }
             }
@@ -235,10 +206,11 @@ fun ScriptEditorScreen(
                     editingIndex = null
                 },
                 onRecaptureTemplate = {
-                    pendingForNew = false
-                    pendingRecaptureIndex = ei
-                    editingIndex = null
-                    launchTemplatePicker()
+                    android.widget.Toast.makeText(
+                        context,
+                        "请在节点图中使用悬浮面板现场框选模板",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
                 },
                 onClearTemplate = {
                     // 清空模板，下次「选图/框选」即为重选（替换）。region 留给后续框选覆盖。
@@ -249,54 +221,8 @@ fun ScriptEditorScreen(
             )
         }
 
-        val src = cropSource
-        if (src != null) {
-            TemplateCropDialog(
-                source = src,
-                onDismiss = {
-                    cropSource = null
-                    pendingForNew = false
-                    pendingRecaptureIndex = null
-                },
-                onConfirm = { bitmap ->
-                    val path = TemplateMatchUseCase.saveTemplate(context, bitmap)
-                    val idx = pendingRecaptureIndex
-                    if (idx != null && idx in actions.indices && path != null) {
-                        actions[idx] = actions[idx].copy(
-                            templatePath = TemplateMatchUseCase.appendTemplatePath(
-                                actions[idx].templatePath,
-                                path,
-                            )
-                        )
-                    } else if (idx == null && path != null) {
-                        actions += Action(
-                            scriptId = scriptId,
-                            index = actions.size,
-                            type = ActionType.IMAGE_MATCH,
-                            startX = 0f, startY = 0f,
-                            durationMs = ActionDefaults.QUICK_TAP_MS,
-                            delayBeforeMs = ActionDefaults.DEFAULT_CLICK_DELAY_MS,
-                            retryCount = ActionDefaults.DEFAULT_IMAGE_DOWN_FALLBACK_PX,
-                            matchThreshold = 0.70f,
-                            templatePath = path,
-                        )
-                        editingIndex = actions.size - 1
-                    }
-                    cropSource = null
-                    pendingForNew = false
-                    pendingRecaptureIndex = null
-                },
-            )
-        }
     }
 }
-
-internal fun decodeBitmap(context: android.content.Context, uri: android.net.Uri): android.graphics.Bitmap? =
-    runCatching {
-        context.contentResolver.openInputStream(uri)?.use {
-            android.graphics.BitmapFactory.decodeStream(it)
-        }
-    }.getOrNull()
 
 private fun <T> MutableList<T>.move(from: Int, to: Int) {
     if (from == to) return
@@ -385,13 +311,17 @@ private fun ActionRow(
 }
 
 @Composable
-private fun TemplateThumb(path: String?, size: androidx.compose.ui.unit.Dp) {
+private fun TemplateThumb(
+    path: String?,
+    size: androidx.compose.ui.unit.Dp,
+    modifier: Modifier = Modifier,
+) {
     val firstPath = remember(path) { TemplateMatchUseCase.splitTemplatePaths(path).firstOrNull() }
     val image = remember(firstPath) {
         firstPath?.let { runCatching { android.graphics.BitmapFactory.decodeFile(it)?.asImageBitmap() }.getOrNull() }
     }
     Box(
-        Modifier
+        modifier
             .size(size)
             .clip(RoundedCornerShape(6.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant),
@@ -414,7 +344,6 @@ private fun TemplateThumb(path: String?, size: androidx.compose.ui.unit.Dp) {
 private fun AddActionMenu(
     onAddSimple: (ActionType) -> Unit,
     onAddAi: () -> Unit,
-    onAddImageMatch: () -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
@@ -454,10 +383,6 @@ private fun AddActionMenu(
             DropdownMenuItem(
                 text = { Text("AI 步骤…") },
                 onClick = { onAddAi(); expanded = false },
-            )
-            DropdownMenuItem(
-                text = { Text("选图点击…") },
-                onClick = { onAddImageMatch(); expanded = false },
             )
         }
     }
@@ -554,7 +479,7 @@ private fun describe(a: Action): String = when (a.type) {
         "页面没变就重复前 ${a.repeatPrevSteps} 步 · 最多 ${a.retryCount} 次 · 间隔 ${a.durationMs}ms"
     ActionType.START -> "图入口"
     ActionType.IF_IMAGE_EXISTS ->
-        "${if (templateCount(a.templatePath) > 0) "区域找图(${templateCount(a.templatePath)}张)" else "⚠ 未设模板"} 走「有」，否则走「无」 · 精度 ${imagePrecision(a.matchThreshold)}"
+        "${if (templateCount(a.templatePath) > 0) "区域找图(模板已设置)" else "⚠ 未设模板"} 走「有」，否则走「无」 · 精度 ${imagePrecision(a.matchThreshold)}"
     ActionType.LOOP -> "循环 ${a.retryCount} 次 · 继续走「环」，到次数走「完」"
     ActionType.STOP -> "终止整张图的执行"
 }
@@ -662,6 +587,7 @@ internal fun EditActionDialog(
     var aiProvider by remember { mutableStateOf(AiProvider.parse(action.aiProvider)) }
     var aiModel by remember { mutableStateOf(action.aiModel.orEmpty()) }
     var showPositionPreview by remember { mutableStateOf(false) }
+    var showIfTemplateActions by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     fun showActionPosition() {
@@ -845,17 +771,27 @@ internal fun EditActionDialog(
                     }
                 }
                 if (action.type == ActionType.IF_IMAGE_EXISTS) {
-                    val count = templateCount(action.templatePath)
+                    val hasTemplate = templateCount(action.templatePath) > 0
                     Spacer(Modifier.height(6.dp))
                     NumField(threshold, { threshold = it }, "识别精度 (0~100，越大越严格)", Modifier.fillMaxWidth())
                     Spacer(Modifier.height(6.dp))
                     NumField(retry, { retry = it }, "下方容错 (px，0=关闭)", Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        TemplateThumb(action.templatePath, 64.dp)
+                        TemplateThumb(
+                            action.templatePath,
+                            64.dp,
+                            Modifier.clickable {
+                                if (hasTemplate) {
+                                    showIfTemplateActions = true
+                                } else {
+                                    onRecaptureTemplate()
+                                }
+                            },
+                        )
                         Spacer(Modifier.width(10.dp))
                         Text(
-                            if (count > 0) "搜索模板 · 共 ${count} 张（找到任一张走「有」）" else "⚠ 尚未设置模板图",
+                            if (hasTemplate) "搜索模板已设置" else "⚠ 尚未设置模板图",
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
@@ -871,14 +807,6 @@ internal fun EditActionDialog(
                             Text("显示位置")
                         }
                         Spacer(Modifier.height(6.dp))
-                    }
-                    OutlinedButton(onClick = onRecaptureTemplate, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (count > 0) "继续添加模板" else "选图 / 截取模板")
-                    }
-                    if (count > 0) {
-                        TextButton(onClick = onClearTemplate, modifier = Modifier.fillMaxWidth()) {
-                            Text("清空模板（重选）")
-                        }
                     }
                 }
                 if (action.type == ActionType.LOOP) {
@@ -928,6 +856,31 @@ internal fun EditActionDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
+    if (showIfTemplateActions) {
+        AlertDialog(
+            onDismissRequest = { showIfTemplateActions = false },
+            title = { Text("模板") },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TemplateThumb(action.templatePath, 72.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text("搜索模板已设置", style = MaterialTheme.typography.bodyMedium)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showIfTemplateActions = false
+                    onRecaptureTemplate()
+                }) { Text("替换") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showIfTemplateActions = false
+                    onClearTemplate()
+                }) { Text("删除") }
+            },
+        )
+    }
     if (showPositionPreview) {
         RegionPositionPreviewDialog(
             title = typeLabel(action.type),

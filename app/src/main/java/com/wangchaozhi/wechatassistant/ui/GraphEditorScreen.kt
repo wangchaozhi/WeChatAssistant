@@ -1,6 +1,5 @@
 package com.wangchaozhi.wechatassistant.ui
 
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -14,9 +13,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import java.io.File
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -127,17 +124,9 @@ fun GraphEditorScreen(
     val density = LocalDensity.current.density
     val context = androidx.compose.ui.platform.LocalContext.current
 
-    // 选图：pendingRecaptureId=给 IMAGE_MATCH 设模板；pendingLiveTemplate=现场框选模板(并写搜索范围)。
-    var pendingRecaptureId by remember { mutableStateOf<Long?>(null) }
+    // 现场框选模板：IMAGE_MATCH 可追加模板；IF_IMAGE_EXISTS 始终替换为单张模板。
     var pendingLiveTemplateId by remember { mutableStateOf<Long?>(null) }
     var pendingLiveTemplateRequestId by remember { mutableStateOf<Long?>(null) }
-    var cropSource by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    val pickImage = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        val bmp = uri?.let { decodeBitmap(context, it) }
-        if (bmp != null) cropSource = bmp else pendingRecaptureId = null
-    }
 
     LaunchedEffect(scriptId) {
         if (scriptId == null) {
@@ -181,15 +170,17 @@ fun GraphEditorScreen(
         if (i >= 0) {
             pushUndo()
             val rect = result.rect
+            val nextPath = if (nodes[i].type == ActionType.IF_IMAGE_EXISTS) {
+                result.templatePath
+            } else {
+                TemplateMatchUseCase.appendTemplatePath(nodes[i].templatePath, result.templatePath)
+            }
             nodes[i] = nodes[i].copy(
                 startX = rect.left.toFloat(),
                 startY = rect.top.toFloat(),
                 endX = rect.right.toFloat(),
                 endY = rect.bottom.toFloat(),
-                templatePath = TemplateMatchUseCase.appendTemplatePath(
-                    nodes[i].templatePath,
-                    result.templatePath,
-                ),
+                templatePath = nextPath,
             )
         }
         pendingLiveTemplateId = null
@@ -515,28 +506,6 @@ fun GraphEditorScreen(
         if (s != null) ScriptMetaDialog(s, onDismiss = { showMeta = false }, onConfirm = { script = it; showMeta = false })
     }
 
-    // 裁剪/框选弹窗
-    val src = cropSource
-    if (src != null) {
-        TemplateCropDialog(
-            source = src,
-            onDismiss = { cropSource = null; pendingRecaptureId = null },
-            onConfirm = { bitmap ->
-                val path = TemplateMatchUseCase.saveTemplate(context, bitmap)
-                val id = pendingRecaptureId
-                val i = if (id != null) nodes.indexOfFirst { it.id == id } else -1
-                if (i >= 0 && path != null) {
-                    nodes[i] = nodes[i].copy(
-                        templatePath = TemplateMatchUseCase.appendTemplatePath(
-                            nodes[i].templatePath,
-                            path,
-                        )
-                    )
-                }
-                cropSource = null; pendingRecaptureId = null
-            },
-        )
-    }
 }
 
 /** AI 节点卡片上显示的「供应商 · 模型」简标；未指定时显示「跟随全局」。 */
@@ -601,10 +570,10 @@ private fun NodeCard(
                 )
             }
             if (node.type == ActionType.IF_IMAGE_EXISTS) {
-                val count = TemplateMatchUseCase.splitTemplatePaths(node.templatePath).size
+                val hasTemplate = TemplateMatchUseCase.splitTemplatePaths(node.templatePath).isNotEmpty()
                 Text(
-                    if (count > 0)
-                        "▣模板${count}张 · 精度${TemplateMatchUseCase.thresholdToPrecision(node.matchThreshold)}"
+                    if (hasTemplate)
+                        "▣模板已设置 · 精度${TemplateMatchUseCase.thresholdToPrecision(node.matchThreshold)}"
                     else "⚠ 未设模板",
                     color = Color(0xCCFFFFFF),
                     style = MaterialTheme.typography.labelSmall,
