@@ -54,8 +54,19 @@ class MainViewModel(
     val lastAiAnswer: StateFlow<String?> = ServiceBus.lastAiAnswer
     val playerState: StateFlow<ServiceBus.PlayerState> = ServiceBus.playerState
 
+    private val _selectedScriptId = MutableStateFlow(settings.selectedScriptId)
+    val selectedScriptId: StateFlow<Long> = _selectedScriptId.asStateFlow()
+
     private val _screen = MutableStateFlow<Screen>(Screen.Home)
     val screen: StateFlow<Screen> = _screen.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            ServiceBus.selectedScriptChanged.collect { id ->
+                _selectedScriptId.value = id
+            }
+        }
+    }
 
     fun navigate(target: Screen) { _screen.value = target }
     fun back() { _screen.value = Screen.Home }
@@ -158,6 +169,7 @@ class MainViewModel(
             scriptRepo.delete(scriptId)
             if (settings.selectedScriptId == scriptId) {
                 settings.selectedScriptId = -1L
+                _selectedScriptId.value = -1L
                 ServiceBus.selectedScriptChanged.tryEmit(-1L)
             }
         }
@@ -165,6 +177,7 @@ class MainViewModel(
 
     fun selectScript(scriptId: Long) {
         settings.selectedScriptId = scriptId
+        _selectedScriptId.value = scriptId
         ServiceBus.selectedScriptChanged.tryEmit(scriptId)
     }
 

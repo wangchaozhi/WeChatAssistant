@@ -273,6 +273,7 @@ private fun MainScreen(
     val overlayReady by viewModel.overlayReady.collectAsState()
     val playerState by viewModel.playerState.collectAsState()
     val lastAnswer by viewModel.lastAiAnswer.collectAsState()
+    val selectedScriptId by viewModel.selectedScriptId.collectAsState()
     val recordModeDescription = recordingModeDescription(viewModel.recordEngine)
 
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
@@ -388,7 +389,8 @@ private fun MainScreen(
             items(scripts, key = { it.id }) { s ->
                 ScriptItem(
                     script = s,
-                    onPlay = { viewModel.play(s.id) },
+                    selected = s.id == selectedScriptId,
+                    onSelect = { viewModel.selectScript(s.id) },
                     onEdit = { onOpenEditor(s.id) },
                     onDelete = { viewModel.delete(s.id) },
                 )
@@ -781,16 +783,23 @@ private fun PlayerStatusCard(
 @Composable
 private fun ScriptItem(
     script: Script,
-    onPlay: () -> Unit,
+    selected: Boolean,
+    onSelect: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
     Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = onEdit,
+        onClick = onSelect,
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.54f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            },
+        ),
     ) {
         Row(
             Modifier
@@ -802,10 +811,17 @@ private fun ScriptItem(
                 modifier = Modifier
                     .size(44.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)),
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.TouchApp, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Icon(
+                    Icons.Filled.TouchApp,
+                    contentDescription = if (selected) "已选脚本" else null,
+                    tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                )
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -817,20 +833,13 @@ private fun ScriptItem(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "循环 ${script.loopCount} 次 · 速度 ${script.speed}x · ${formatScriptDate(script.createdAt)}",
+                    (if (selected) "已选 · " else "") +
+                        "循环 ${script.loopCount} 次 · 速度 ${script.speed}x · ${formatScriptDate(script.createdAt)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-            }
-            FilledTonalButton(
-                onClick = onPlay,
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp),
-                modifier = Modifier.defaultMinSize(minWidth = 48.dp),
-            ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = "播放", modifier = Modifier.size(18.dp))
             }
             IconButton(onClick = onEdit) {
                 Icon(Icons.Filled.Edit, contentDescription = "编辑")
