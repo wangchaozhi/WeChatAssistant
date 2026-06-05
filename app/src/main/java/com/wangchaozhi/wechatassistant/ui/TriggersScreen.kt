@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,6 +44,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
@@ -65,6 +69,20 @@ fun TriggersScreen(
     val triggers by viewModel.observeTriggers(scriptId).collectAsState(initial = emptyList())
     val scriptName = viewModel.scriptName(scriptId) ?: "脚本 #$scriptId"
     var editing by remember { mutableStateOf<ScriptTrigger?>(null) }
+
+    // 通知使用权状态：去系统设置授权后返回本界面，Compose 不会自动重读，
+    // 监听生命周期 ON_RESUME 主动刷新，避免「明明授权了仍显示未授权、要重进才更新」。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var notifGranted by remember { mutableStateOf(isNotifListenerEnabled(context)) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notifGranted = isNotifListenerEnabled(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     fun save(trigger: ScriptTrigger) {
         scope.launch {
@@ -106,7 +124,7 @@ fun TriggersScreen(
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item { PermissionHints(context) }
+            item { PermissionHints(context, notifGranted) }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
@@ -153,10 +171,11 @@ fun TriggersScreen(
     }
 }
 
+private fun isNotifListenerEnabled(context: android.content.Context): Boolean =
+    NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+
 @Composable
-private fun PermissionHints(context: android.content.Context) {
-    val enabledListeners = NotificationManagerCompat.getEnabledListenerPackages(context)
-    val notifGranted = enabledListeners.contains(context.packageName)
+private fun PermissionHints(context: android.content.Context, notifGranted: Boolean) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("权限", style = MaterialTheme.typography.titleSmall)
