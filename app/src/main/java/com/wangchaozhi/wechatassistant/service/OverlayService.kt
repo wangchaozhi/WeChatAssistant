@@ -349,7 +349,7 @@ class OverlayService : LifecycleService() {
             isSelected = true
             visibility = View.GONE
         }
-        // 选脚本按钮：未选显示☰，已选显示✓；点击弹出脚本列表。
+        // 选脚本按钮：始终显示☰，点击弹出脚本列表（已选状态由右侧脚本名表达）。
         val btnPick = compactBtn(ctx, "☰") { }
         pickBtn = btnPick
         val statusBox = LinearLayout(ctx).apply {
@@ -932,7 +932,7 @@ class OverlayService : LifecycleService() {
             recordedEnters.clear()
             recordedAi.clear()
             recordedTemplates.clear()
-            btn.text = "完成"
+            btn.text = "✓"
             ServiceBus.recordingMode.value = true
             ServiceBus.adbRecording.value = false
             showRecordOverlay()
@@ -974,7 +974,7 @@ class OverlayService : LifecycleService() {
             recordedEnters.clear()
             recordedAi.clear()
             recordedTemplates.clear()
-            btn.text = "完成"
+            btn.text = "✓"
             ServiceBus.recordingMode.value = true
             ServiceBus.adbRecording.value = true
             adbReader.start(lifecycleScope) { message ->
@@ -1080,8 +1080,8 @@ class OverlayService : LifecycleService() {
 
     private fun refreshStatus() {
         statusScriptLabel?.visibility = View.GONE
-        // 选脚本按钮：已选显示✓，未选显示☰。
-        pickBtn?.text = if (selectedScriptName != null) "✓" else "☰"
+        // 选脚本按钮始终显示☰（功能恒为打开脚本列表），已选状态由右侧脚本名表达。
+        pickBtn?.text = "☰"
         if (recording) {
             val captured = recordedTouches.size + recordedPastes.size +
                 recordedEnters.size + recordedAi.size +
@@ -1097,7 +1097,7 @@ class OverlayService : LifecycleService() {
             ServiceBus.PlayerState.Idle -> {
                 val name = selectedScriptName
                 if (name != null) {
-                    // ✓按钮已表示已选，名字直接显示在按钮右侧。
+                    // 已选脚本名直接显示在☰按钮右侧。
                     statusLabel?.text = ""
                     statusScriptLabel?.text = name
                     statusScriptLabel?.visibility = View.VISIBLE
