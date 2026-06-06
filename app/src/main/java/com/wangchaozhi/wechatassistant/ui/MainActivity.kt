@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -306,6 +307,7 @@ private fun MainScreen(
     val selectedScriptId by viewModel.selectedScriptId.collectAsState()
     val recordEngine by viewModel.recordEngineState.collectAsState()
     val recordModeDescription = recordingModeDescription(recordEngine)
+    var pendingDeleteScript by remember { mutableStateOf<Script?>(null) }
 
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
     var notifGranted by remember { mutableStateOf(checkNotificationGranted(ctx)) }
@@ -434,7 +436,7 @@ private fun MainScreen(
                     onSelect = { viewModel.selectScript(s.id) },
                     onEdit = { onOpenEditor(s.id) },
                     onTriggers = { onOpenTriggers(s.id) },
-                    onDelete = { viewModel.delete(s.id) },
+                    onDelete = { pendingDeleteScript = s },
                 )
             }
             if (scripts.isEmpty()) {
@@ -443,6 +445,32 @@ private fun MainScreen(
                 }
             }
         }
+    }
+
+    pendingDeleteScript?.let { script ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteScript = null },
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            title = { Text("删除脚本？") },
+            text = { Text("将删除「${script.name}」，此操作不可撤销。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.delete(script.id)
+                        pendingDeleteScript = null
+                    },
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteScript = null }) {
+                    Text("取消")
+                }
+            },
+        )
     }
 }
 
