@@ -1,6 +1,7 @@
 package com.wangchaozhi.wechatassistant.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -48,6 +51,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -225,13 +229,24 @@ fun GraphEditorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(script?.name ?: "节点图") },
+                title = {
+                    Text(
+                        script?.name ?: "节点图",
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        modifier = Modifier.basicMarquee(),
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") }
                 },
                 actions = {
-                    TextButton(onClick = { undo() }, enabled = undoStack.isNotEmpty()) { Text("撤回") }
-                    TextButton(onClick = { redo() }, enabled = redoStack.isNotEmpty()) { Text("重做") }
+                    IconButton(onClick = { undo() }, enabled = undoStack.isNotEmpty()) {
+                        Icon(Icons.AutoMirrored.Filled.Undo, "撤回")
+                    }
+                    IconButton(onClick = { redo() }, enabled = redoStack.isNotEmpty()) {
+                        Icon(Icons.AutoMirrored.Filled.Redo, "重做")
+                    }
                     IconButton(onClick = { showMeta = true }) { Icon(Icons.Default.Settings, "信息") }
                     Box {
                         IconButton(onClick = { addMenu = true }) { Icon(Icons.Default.Add, "加节点") }
@@ -245,14 +260,14 @@ fun GraphEditorScreen(
                             },
                         )
                     }
-                    TextButton(onClick = {
-                        val s = script ?: return@TextButton
+                    IconButton(onClick = {
+                        val s = script ?: return@IconButton
                         val selectAfterSave = scriptId == null
                         viewModel.saveGraph(s, nodes.toList(), edges.toList()) { savedId ->
                             if (selectAfterSave) viewModel.selectScript(savedId)
                             onBack()
                         }
-                    }) { Text("保存") }
+                    }) { Text("💾", fontSize = 20.sp) }
                 },
             )
         },

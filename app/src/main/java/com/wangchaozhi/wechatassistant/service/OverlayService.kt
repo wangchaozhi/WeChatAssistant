@@ -68,7 +68,7 @@ class OverlayService : LifecycleService() {
     private var statusLabel: TextView? = null
     private var statusScriptLabel: TextView? = null
     private var playStopBtn: Button? = null
-    private var selectBtn: Button? = null
+    private var pickBtn: Button? = null
     private var shareBtn: Button? = null
     private var liveRegionPickBtn: Button? = null
     // 已选脚本：「选」按钮设定，「▶」按钮据此直接播放，再次播放无需重选。
@@ -332,7 +332,6 @@ class OverlayService : LifecycleService() {
             dividerDrawable = rowSpacer
         }
         val label = TextView(ctx).apply {
-            text = "连点"
             setTextColor(Color.WHITE)
             textSize = 12f
             gravity = Gravity.CENTER_VERTICAL
@@ -350,15 +349,19 @@ class OverlayService : LifecycleService() {
             isSelected = true
             visibility = View.GONE
         }
+        // 选脚本按钮：未选显示☰，已选显示✓；点击弹出脚本列表。
+        val btnPick = compactBtn(ctx, "☰") { }
+        pickBtn = btnPick
         val statusBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             minimumWidth = dp(46)
             setPadding(0, 0, dp(6), 0)
+            addView(btnPick)
             addView(label, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-            ))
+            ).apply { leftMargin = dp(4) })
             addView(scriptNameLabel, LinearLayout.LayoutParams(
                 0,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -367,6 +370,13 @@ class OverlayService : LifecycleService() {
         }
         statusLabel = label
         statusScriptLabel = scriptNameLabel
+        // 点选脚本按钮或状态栏名字区域均可弹出脚本列表选择/切换脚本。
+        btnPick.setOnClickListener {
+            lifecycleScope.launch { showScriptPicker(btnPick) }
+        }
+        statusBox.setOnClickListener {
+            lifecycleScope.launch { showScriptPicker(statusBox) }
+        }
         val btnRec = compactBtn(ctx, "录制") { toggleRecording(recBtn ?: return@compactBtn) }
         recBtn = btnRec
         val btnHome = compactBtn(ctx, "↗") { launchHome(null, togglePrevious = true) }
@@ -396,15 +406,10 @@ class OverlayService : LifecycleService() {
             setPadding(0, 0, dp(6), 0)
         }
         extraActionsRow = nodesRow
-        // 「选」：只负责挑选脚本，不播放。选中后由「▶」播放。
-        val btnSelect = compactBtn(ctx, "☰") {
-            lifecycleScope.launch {
-                selectBtn?.let { showScriptPicker(it) }
-            }
-        }
-        selectBtn = btnSelect
+        // 「✎」：编辑当前所选脚本（未选时提示并弹列表，锚定到状态栏）。选脚本改到点状态栏「已选」。
+        val btnEdit = compactBtn(ctx, "✎") { editSelectedScript(statusBox) }
         // 「▶/停止」：播放已选脚本；播放中则停止。未选脚本时打开选择器引导先选。
-        val btnPlayStop = compactBtn(ctx, "▶") { togglePlayStop(selectBtn) }
+        val btnPlayStop = compactBtn(ctx, "▶") { togglePlayStop(statusBox) }
         playStopBtn = btnPlayStop
         val btnAi = compactBtn(ctx, "AI") {
             val prompt = App.from(ctx).settingsRepo.defaultPrompt
@@ -463,11 +468,11 @@ class OverlayService : LifecycleService() {
         }
         liveRegionPickBtn = btnLiveRegionPick
         topRow.addView(statusBox, LinearLayout.LayoutParams(
-            dp(92),
+            dp(110),
             ViewGroup.LayoutParams.WRAP_CONTENT,
         ))
         topRow.addView(btnRec)
-        topRow.addView(btnSelect)
+        topRow.addView(btnEdit)
         topRow.addView(btnPlayStop)
         nodesRow.addView(nodesLabel)
         nodesRow.addView(btnAi)
@@ -1075,6 +1080,8 @@ class OverlayService : LifecycleService() {
 
     private fun refreshStatus() {
         statusScriptLabel?.visibility = View.GONE
+        // 选脚本按钮：已选显示✓，未选显示☰。
+        pickBtn?.text = if (selectedScriptName != null) "✓" else "☰"
         if (recording) {
             val captured = recordedTouches.size + recordedPastes.size +
                 recordedEnters.size + recordedAi.size +
@@ -1090,12 +1097,13 @@ class OverlayService : LifecycleService() {
             ServiceBus.PlayerState.Idle -> {
                 val name = selectedScriptName
                 if (name != null) {
-                    statusLabel?.text = "已选 · "
+                    // ✓按钮已表示已选，名字直接显示在按钮右侧。
+                    statusLabel?.text = ""
                     statusScriptLabel?.text = name
                     statusScriptLabel?.visibility = View.VISIBLE
                     statusScriptLabel?.isSelected = true
                 } else {
-                    statusLabel?.text = "连点"
+                    statusLabel?.text = ""
                 }
             }
         }
@@ -1705,9 +1713,17 @@ class OverlayService : LifecycleService() {
                 // 已选脚本最左边显示钩，并高亮文字，便于一眼看出当前选中项。
                 text = (if (checked) "✓ " else "    ") + s.name
                 setTextColor(if (checked) Color.parseColor("#80D8FF") else Color.WHITE)
-                textSize = 14f
+                textSize = 12f
                 isSingleLine = true
-                ellipsize = android.text.TextUtils.TruncateAt.END
+                if (checked) {
+                    // 当前选中项用跑马灯滚动完整名称（列表里只有一行选中，不会显得乱）。
+                    ellipsize = android.text.TextUtils.TruncateAt.MARQUEE
+                    marqueeRepeatLimit = -1
+                    setHorizontallyScrolling(true)
+                    isSelected = true
+                } else {
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }
                 setPadding(dp(12), dp(10), dp(12), dp(10))
                 setOnClickListener {
                     // 只选中、不播放：记录(持久化)所选脚本，播放交给「▶」按钮。
@@ -1722,33 +1738,66 @@ class OverlayService : LifecycleService() {
                 setPadding(dp(16), 0, dp(4), dp(6))
             }
             val arrow = smallBtn(ctx).apply {
-                text = "▸ 节点"
+                text = "▸🔗"
+                textSize = 10f
+                setPadding(dp(8), dp(4), dp(8), dp(4))
                 setOnClickListener {
                     if (nodeList.visibility == View.GONE) {
-                        text = "▾ 节点"
+                        text = "▾🔗"
                         nodeList.visibility = View.VISIBLE
                         if (nodeList.childCount == 0) {
                             lifecycleScope.launch { populateNodeList(nodeList, s.id) }
                         }
                     } else {
-                        text = "▸ 节点"
+                        text = "▸🔗"
                         nodeList.visibility = View.GONE
                     }
                 }
             }
-            // 「✎」直接打开该脚本的编辑页（不必先选中再编辑）。
-            val edit = smallBtn(ctx).apply {
-                text = "✎"
+            // 「🏷」改名：弹出悬浮重命名输入框（复用 showRenameDialog）。编辑脚本走顶行✎（选中后编辑）。
+            val rename = smallBtn(ctx).apply {
+                text = "📝"
+                textSize = 10f
+                setPadding(dp(8), dp(4), dp(8), dp(4))
                 setOnClickListener {
                     dismissScriptPicker()
-                    launchHome(s.id)
+                    showRenameDialog(s.id, s.name)
+                }
+            }
+            // 「🗑」删除脚本：两步确认，先点变「确定?」，3 秒内再点才真正删除。
+            val del = smallBtn(ctx).apply {
+                var armed = false
+                val disarm = Runnable {
+                    armed = false
+                    text = "🗑"
+                    setTextColor(Color.WHITE)
+                }
+                text = "🗑"
+                textSize = 10f
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                setOnClickListener {
+                    if (!armed) {
+                        armed = true
+                        text = "确定"
+                        setTextColor(Color.parseColor("#FF6E6E"))
+                        postDelayed(disarm, 1000)
+                        return@setOnClickListener
+                    }
+                    removeCallbacks(disarm)
+                    lifecycleScope.launch {
+                        App.from(this@OverlayService).scriptRepo.delete(s.id)
+                        if (selectedScriptId == s.id) clearSelectedScript()
+                        list.removeView(scriptBox)
+                        Toast.makeText(this@OverlayService, "已删除「${s.name}」", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
             header.addView(name, LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
             ))
             header.addView(arrow)
-            header.addView(edit)
+            header.addView(rename)
+            header.addView(del)
             scriptBox.addView(header)
             scriptBox.addView(nodeList)
             list.addView(scriptBox)
@@ -1756,7 +1805,7 @@ class OverlayService : LifecycleService() {
         val newItem = TextView(ctx).apply {
             text = "+ 新建脚本"
             setTextColor(Color.WHITE)
-            textSize = 14f
+            textSize = 12f
             setPadding(dp(12), dp(10), dp(12), dp(10))
             setOnClickListener {
                 dismissScriptPicker()
@@ -1817,7 +1866,7 @@ class OverlayService : LifecycleService() {
             container.addView(TextView(ctx).apply {
                 text = "（无节点）"
                 setTextColor(Color.parseColor("#AAAAAA"))
-                textSize = 12f
+                textSize = 11f
                 setPadding(dp(8), dp(6), dp(8), dp(6))
             })
             return
@@ -1826,7 +1875,7 @@ class OverlayService : LifecycleService() {
             container.addView(TextView(ctx).apply {
                 text = nodeLabel(a)
                 setTextColor(Color.WHITE)
-                textSize = 12f
+                textSize = 11f
                 isSingleLine = true
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 setPadding(dp(8), dp(6), dp(8), dp(6))
@@ -1943,7 +1992,7 @@ class OverlayService : LifecycleService() {
         pendingLiveTemplatePickRequestId = null
         pendingLiveTemplatePickScriptId = null
         positionMaskView = null
-        selectBtn = null
+        pickBtn = null
         collapsedBar = null
         collapsedPlayBtn = null
         extraActionsRow = null
