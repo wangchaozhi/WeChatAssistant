@@ -80,17 +80,25 @@ class App : Application() {
         runCatching { if (logFile.exists()) logFile.length() else 0L }.getOrDefault(0L)
 
     fun debugBitmapFiles(): List<File> =
-        runCatching {
-            filesDir.listFiles { file ->
-                file.isFile && file.name.startsWith("dbg_") && file.name.endsWith(".png")
-            }
-                ?.sortedWith(compareBy<File> { it.name.removePrefix("dbg_") }.thenBy { it.lastModified() })
-                .orEmpty()
-        }.getOrDefault(emptyList())
+        if (!BuildConfig.DEBUG) {
+            emptyList()
+        } else {
+            runCatching {
+                filesDir.listFiles { file ->
+                    file.isFile && file.name.startsWith("dbg_") && file.name.endsWith(".png")
+                }
+                    ?.sortedWith(compareBy<File> { it.name.removePrefix("dbg_") }.thenBy { it.lastModified() })
+                    .orEmpty()
+            }.getOrDefault(emptyList())
+        }
 
     /** 删除所有调试图片(dbg_*.png)，返回删掉的张数。 */
     fun clearDebugBitmaps(): Int =
-        runCatching { debugBitmapFiles().count { it.delete() } }.getOrDefault(0)
+        if (!BuildConfig.DEBUG) {
+            0
+        } else {
+            runCatching { debugBitmapFiles().count { it.delete() } }.getOrDefault(0)
+        }
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()

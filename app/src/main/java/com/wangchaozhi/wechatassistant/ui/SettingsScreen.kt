@@ -88,6 +88,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.wangchaozhi.wechatassistant.App
+import com.wangchaozhi.wechatassistant.BuildConfig
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.feature.ai.AiProvider
 import com.wangchaozhi.wechatassistant.feature.ai.AiReasoningEffort
@@ -844,13 +845,15 @@ private fun DebugLogCard(highlight: Boolean = false) {
                     },
                     shape = RoundedCornerShape(8.dp),
                 ) { Text("复制") }
-                OutlinedButton(
-                    onClick = {
-                        debugImages = app.debugBitmapFiles()
-                        showImages = true
-                    },
-                    shape = RoundedCornerShape(8.dp),
-                ) { Text("查看图片") }
+                if (BuildConfig.DEBUG) {
+                    OutlinedButton(
+                        onClick = {
+                            debugImages = app.debugBitmapFiles()
+                            showImages = true
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                    ) { Text("查看图片") }
+                }
                 TextButton(
                     onClick = {
                         app.clearLog()
@@ -899,7 +902,7 @@ private fun DebugLogCard(highlight: Boolean = false) {
         )
     }
 
-    if (showImages) {
+    if (BuildConfig.DEBUG && showImages) {
         DebugImagesDialog(
             images = debugImages,
             onRefresh = { debugImages = app.debugBitmapFiles() },

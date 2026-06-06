@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PointF
 import android.graphics.Rect
+import com.wangchaozhi.wechatassistant.BuildConfig
 import com.wangchaozhi.wechatassistant.data.model.ActionDefaults
 import com.wangchaozhi.wechatassistant.service.ServiceBus
 import kotlinx.coroutines.Dispatchers
@@ -327,6 +328,7 @@ class TemplateMatchUseCase(
         found: Boolean,
         debugName: String,
     ) {
+        if (!BuildConfig.DEBUG) return
         runCatching {
             val out = screen.copy(Bitmap.Config.ARGB_8888, true) ?: return
             val canvas = Canvas(out)

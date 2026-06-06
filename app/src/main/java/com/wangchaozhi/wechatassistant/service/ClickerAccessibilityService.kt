@@ -10,6 +10,7 @@ import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.wangchaozhi.wechatassistant.App
+import com.wangchaozhi.wechatassistant.BuildConfig
 import com.wangchaozhi.wechatassistant.data.model.Action
 import com.wangchaozhi.wechatassistant.data.model.ActionDefaults
 import com.wangchaozhi.wechatassistant.data.model.ActionType
@@ -347,7 +348,7 @@ class ClickerAccessibilityService : AccessibilityService() {
                     // 避免刷新/列表挪动(如刚发完朋友圈)时拿中间帧误判 found 抖动。0=保持单次瞬时判定。
                     if (node.durationMs > 0L) awaitRegionSettled(region, node.durationMs)
                     val seq = ++debugImageSeq
-                    val dbg = "dbg_imgexists_$seq"
+                    val dbg = if (BuildConfig.DEBUG) "dbg_imgexists_$seq" else null
                     val result = if (paths.isNotEmpty()) {
                         val matcher = App.from(this@ClickerAccessibilityService).templateMatch
                         matcher.locateAny(
@@ -368,7 +369,7 @@ class ClickerAccessibilityService : AccessibilityService() {
                             "thr=${"%.2f".format(node.matchThreshold)} " +
                             "score=${match?.score?.let { "%.3f".format(it) } ?: "-"} " +
                             "tpl=${match?.index?.plus(1) ?: "-"} " +
-                            "found=$found center=${match?.point} region=$region dbg=$dbg.png " +
+                            "found=$found center=${match?.point} region=$region dbg=${dbg?.let { "$it.png" } ?: "-"} " +
                             "err=${result.exceptionOrNull()?.message.orEmpty()}"
                     )
                     if (found) 0 else 1
@@ -637,7 +638,7 @@ class ClickerAccessibilityService : AccessibilityService() {
                 val match = if (budgetMs > 0L) {
                     locateStable(paths, action, region, budgetMs)
                 } else {
-                    val dbg = "dbg_imgclick_${System.currentTimeMillis()}"
+                    val dbg = if (BuildConfig.DEBUG) "dbg_imgclick_${System.currentTimeMillis()}" else null
                     App.from(this@ClickerAccessibilityService).templateMatch
                         .locateAny(
                             paths,
