@@ -446,6 +446,10 @@ internal fun newDefaultAction(scriptId: Long, index: Int, type: ActionType): Act
         scriptId = scriptId, index = index, type = type,
         startX = 0f, startY = 0f, durationMs = 0L,
     )
+    ActionType.CALL_SCRIPT -> Action(
+        scriptId = scriptId, index = index, type = type,
+        startX = 0f, startY = 0f, durationMs = 0L,
+    )
 }
 
 internal fun typeLabel(t: ActionType): String = when (t) {
@@ -462,6 +466,7 @@ internal fun typeLabel(t: ActionType): String = when (t) {
     ActionType.IF_IMAGE_EXISTS -> "条件：图像是否存在"
     ActionType.LOOP -> "循环 N 次"
     ActionType.STOP -> "停止"
+    ActionType.CALL_SCRIPT -> "调用脚本"
 }
 
 private fun describe(a: Action): String = when (a.type) {
@@ -482,6 +487,8 @@ private fun describe(a: Action): String = when (a.type) {
         "${if (templateCount(a.templatePath) > 0) "区域找图(模板已设置)" else "⚠ 未设模板"} 走「有」，否则走「无」 · 精度 ${imagePrecision(a.matchThreshold)}"
     ActionType.LOOP -> "循环 ${a.retryCount} 次 · 继续走「环」，到次数走「完」"
     ActionType.STOP -> "终止整张图的执行"
+    ActionType.CALL_SCRIPT ->
+        if (a.callScriptId != null) "调用脚本 #${a.callScriptId} 作为子流程" else "⚠ 未选择目标脚本"
 }
 
 private fun templateCount(path: String?): Int = TemplateMatchUseCase.splitTemplatePaths(path).size
@@ -558,6 +565,8 @@ internal fun EditActionDialog(
     onClearTemplate: () -> Unit = {},
     fetchModels: suspend (AiProvider) -> Result<List<String>> = { Result.success(it.models) },
     cachedModels: (AiProvider) -> List<String> = { emptyList() },
+    // CALL_SCRIPT 目标脚本可选列表（已排除当前脚本自身）。
+    callableScripts: List<Script> = emptyList(),
 ) {
     var startX by remember { mutableStateOf(action.startX.toString()) }
     var startY by remember { mutableStateOf(action.startY.toString()) }
@@ -583,6 +592,8 @@ internal fun EditActionDialog(
     }
     var repeatSteps by remember { mutableStateOf(action.repeatPrevSteps.toString()) }
     var alias by remember { mutableStateOf(action.alias.orEmpty()) }
+    // CALL_SCRIPT：选中的目标脚本 id。
+    var callScriptId by remember { mutableStateOf(action.callScriptId) }
     // AI 节点：供应商（null=跟随全局）与具体模型。
     var aiProvider by remember { mutableStateOf(AiProvider.parse(action.aiProvider)) }
     var aiModel by remember { mutableStateOf(action.aiModel.orEmpty()) }
@@ -672,7 +683,7 @@ internal fun EditActionDialog(
                     ActionType.IMAGE_MATCH, ActionType.PASTE, ActionType.ENTER,
                     ActionType.WAIT_PAGE_CHANGE,
                     ActionType.START, ActionType.IF_IMAGE_EXISTS,
-                    ActionType.LOOP, ActionType.STOP -> { /* no coords */ }
+                    ActionType.LOOP, ActionType.STOP, ActionType.CALL_SCRIPT -> { /* no coords */ }
                 }
                 if (action.type == ActionType.WAIT_PAGE_CHANGE) {
                     Spacer(Modifier.height(6.dp))
@@ -688,7 +699,8 @@ internal fun EditActionDialog(
                         action.type != ActionType.PASTE &&
                         action.type != ActionType.ENTER &&
                         action.type != ActionType.LOOP &&
-                        action.type != ActionType.STOP
+                        action.type != ActionType.STOP &&
+                        action.type != ActionType.CALL_SCRIPT
                     ) {
                         NumField(
                             duration,
@@ -821,6 +833,17 @@ internal fun EditActionDialog(
                     Text("执行到此节点立即终止整张图（含整体循环）。",
                         style = MaterialTheme.typography.bodySmall)
                 }
+                if (action.type == ActionType.CALL_SCRIPT) {
+                    Spacer(Modifier.height(6.dp))
+                    CallScriptPicker(
+                        scripts = callableScripts,
+                        selectedId = callScriptId,
+                        onSelect = { callScriptId = it },
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text("作为子流程把目标脚本整图跑一遍（含其整体循环），结束后回到本节点继续往下。",
+                        style = MaterialTheme.typography.bodySmall)
+                }
             }
         },
         confirmButton = {
@@ -850,6 +873,7 @@ internal fun EditActionDialog(
                         alias = alias.ifBlank { null },
                         aiProvider = aiProvider?.name,
                         aiModel = if (aiProvider == null) null else aiModel.ifBlank { null },
+                        callScriptId = if (action.type == ActionType.CALL_SCRIPT) callScriptId else action.callScriptId,
                     )
                 )
             }) { Text("保存") }
@@ -949,6 +973,37 @@ private fun RegionPositionPreviewDialog(
                 }
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("知道了") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CallScriptPicker(
+    scripts: List<Script>,
+    selectedId: Long?,
+    onSelect: (Long?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedName = scripts.firstOrNull { it.id == selectedId }?.name
+        ?: selectedId?.let { "脚本 #$it（已删除？）" }
+        ?: "未选择"
+    Box {
+        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text("目标脚本：$selectedName")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (scripts.isEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("没有其它脚本可调用") },
+                    onClick = { expanded = false },
+                )
+            }
+            scripts.forEach { s ->
+                DropdownMenuItem(
+                    text = { Text(s.name) },
+                    onClick = { onSelect(s.id); expanded = false },
+                )
             }
         }
     }

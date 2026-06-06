@@ -17,6 +17,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -84,7 +86,7 @@ class OverlayService : LifecycleService() {
     private val bubbleHandler = Handler(Looper.getMainLooper())
     private val hideBubble = Runnable { bubble?.visibility = View.GONE }
     private val recordedTouches = mutableListOf<ServiceBus.RawTouch>()
-    private val recordedPastes = mutableListOf<Long>()
+    private val recordedPastes = mutableListOf<RecordedPasteStep>()
     private val recordedEnters = mutableListOf<Long>()
     // 录制时点的 AI：start=点击时刻，end=AI 返回结果的时刻(默认等于 start，结果回来时回填)。
     // 用 end 作为这步的结束时间，下一步(如粘贴)的间隔才不会把 AI 识图耗时算进去。
@@ -115,7 +117,11 @@ class OverlayService : LifecycleService() {
         super.onCreate()
         wm = getSystemService(WindowManager::class.java)
         startForegroundCompat()
-        showPanel()
+        if (!showPanel()) {
+            ServiceBus.overlayReady.value = false
+            stopSelf()
+            return
+        }
         restoreSelectedScript()
         ServiceBus.overlayReady.value = true
         lifecycleScope.launch {
@@ -165,9 +171,15 @@ class OverlayService : LifecycleService() {
         }
         lifecycleScope.launch {
             ServiceBus.selectedScriptChanged.collect { id ->
+                if (id <= 0L) {
+                    clearSelectedScript()
+                    return@collect
+                }
                 val data = App.from(this@OverlayService).scriptRepo.load(id)
                 if (data != null) {
                     setSelectedScript(id, data.script.name)
+                } else if (selectedScriptId == id) {
+                    clearSelectedScript()
                 }
             }
         }
@@ -283,8 +295,26 @@ class OverlayService : LifecycleService() {
             setOnClickListener { onClick() }
         }
 
-    private fun showPanel() {
-        if (panelView != null) return
+    private fun safeAddOverlay(
+        view: View,
+        params: WindowManager.LayoutParams,
+        label: String,
+    ): Boolean {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "悬浮窗权限已关闭，请重新授权后再启动面板", Toast.LENGTH_LONG).show()
+            Log.w(TAG, "Cannot add $label: overlay permission is not granted")
+            return false
+        }
+        return runCatching {
+            wm.addView(view, params)
+        }.onFailure { e ->
+            Toast.makeText(this, "$label 启动失败，请重新授权悬浮窗权限", Toast.LENGTH_LONG).show()
+            Log.e(TAG, "Cannot add $label", e)
+        }.isSuccess
+    }
+
+    private fun showPanel(): Boolean {
+        if (panelView != null) return true
         val ctx = this
         val container = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -339,7 +369,7 @@ class OverlayService : LifecycleService() {
         statusScriptLabel = scriptNameLabel
         val btnRec = compactBtn(ctx, "录制") { toggleRecording(recBtn ?: return@compactBtn) }
         recBtn = btnRec
-        val btnHome = compactBtn(ctx, "↗") { launchHome(null) }
+        val btnHome = compactBtn(ctx, "↗") { launchHome(null, togglePrevious = true) }
         val btnClose = compactBtn(ctx, "×") { stopSelf() }
         val btnCollapse = compactBtn(ctx, "⋮") { collapsePanel() }
         val systemRow = LinearLayout(ctx).apply {
@@ -395,7 +425,7 @@ class OverlayService : LifecycleService() {
         }
         val btnPaste = compactBtn(ctx, "粘贴") {
             if (recording) {
-                recordedPastes += recordTimestamp()
+                recordedPastes += RecordedPasteStep(recordTimestamp(), currentPasteText())
                 refreshStatus()
             }
             if (!ServiceBus.accessibilityReady.value) {
@@ -495,8 +525,9 @@ class OverlayService : LifecycleService() {
         panelParams = params
 
         attachDrag(container, params)
-        wm.addView(container, params)
+        if (!safeAddOverlay(container, params, "悬浮控制面板")) return false
         panelView = container
+        return true
     }
 
     private fun collapsePanel() {
@@ -606,13 +637,27 @@ class OverlayService : LifecycleService() {
             Toast.makeText(this, "请先开启「无障碍」服务", Toast.LENGTH_SHORT).show()
             return
         }
-        val id = selectedScriptId
-        if (id == null) {
-            Toast.makeText(this, "请先用「选」选择脚本", Toast.LENGTH_SHORT).show()
-            if (pickerAnchor != null) lifecycleScope.launch { showScriptPicker(pickerAnchor) }
-            return
+        lifecycleScope.launch {
+            val scripts = App.from(this@OverlayService).scriptRepo.observeScripts().first()
+            if (scripts.isEmpty()) {
+                clearSelectedScript()
+                Toast.makeText(this@OverlayService, "暂无脚本，请先录制或新建脚本", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val id = selectedScriptId
+            if (id == null) {
+                Toast.makeText(this@OverlayService, "请先用「选」选择脚本", Toast.LENGTH_SHORT).show()
+                if (pickerAnchor != null) showScriptPicker(pickerAnchor)
+                return@launch
+            }
+            if (scripts.none { it.id == id }) {
+                clearSelectedScript()
+                Toast.makeText(this@OverlayService, "所选脚本已删除，请重新选择", Toast.LENGTH_SHORT).show()
+                if (pickerAnchor != null) showScriptPicker(pickerAnchor)
+                return@launch
+            }
+            ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Play(id))
         }
-        ServiceBus.playerCmd.tryEmit(ServiceBus.PlayerCmd.Play(id))
     }
 
     /** 打开主界面编辑当前所选脚本。未选时提示并打开选择器（锚定到 [pickerAnchor]）。 */
@@ -691,6 +736,15 @@ class OverlayService : LifecycleService() {
             }
         }
         bubbleHandler.postDelayed(hideBubble, 500)
+    }
+
+    private fun currentPasteText(): String? =
+        ServiceBus.lastAiAnswer.value?.takeIf { it.isNotEmpty() } ?: clipboardText()
+
+    private fun clipboardText(): String? {
+        val clip = getSystemService(android.content.ClipboardManager::class.java)
+        return clip?.primaryClip?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)?.coerceToText(this)?.toString()?.takeIf { it.isNotEmpty() }
     }
 
     private fun showRecordResult(scriptId: Long, scriptName: String) {
@@ -797,7 +851,7 @@ class OverlayService : LifecycleService() {
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE or
                 WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
-        wm.addView(root, params)
+        if (!safeAddOverlay(root, params, "重命名窗口")) return
         renameView = root
         edit.requestFocus()
     }
@@ -956,13 +1010,21 @@ class OverlayService : LifecycleService() {
             gravity = Gravity.TOP or Gravity.START
         }
         recordOverlayParams = params
-        wm.addView(view, params)
+        if (!safeAddOverlay(view, params, "录制覆盖层")) {
+            recordOverlayParams = null
+            recording = false
+            ServiceBus.recordingMode.value = false
+            ServiceBus.adbRecording.value = false
+            recBtn?.text = "录制"
+            refreshStatus()
+            return
+        }
         recordOverlay = view
         // 把面板从窗口栈里摘下再加回去，使其浮在录制层之上。
         panelView?.let { p ->
             val pp = panelParams ?: return@let
             runCatching { wm.removeView(p) }
-            runCatching { wm.addView(p, pp) }
+            runCatching { safeAddOverlay(p, pp, "悬浮控制面板") }
         }
     }
 
@@ -1144,8 +1206,11 @@ class OverlayService : LifecycleService() {
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         )
+        if (!safeAddOverlay(root, params, "框选覆盖层")) {
+            suppressTouchRecording = false
+            return
+        }
         cropOverlay = root
-        wm.addView(root, params)
     }
 
     private fun showLiveTemplateCropOverlayForRecording() {
@@ -1261,8 +1326,8 @@ class OverlayService : LifecycleService() {
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         )
+        if (!safeAddOverlay(root, params, "模板裁剪窗口")) return
         cropOverlay = root
-        wm.addView(root, params)
     }
 
     private fun showEditorTemplateCropOverlay(requestId: Long, bmp: android.graphics.Bitmap) {
@@ -1329,8 +1394,8 @@ class OverlayService : LifecycleService() {
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         )
+        if (!safeAddOverlay(root, params, "模板裁剪窗口")) return
         cropOverlay = root
-        wm.addView(root, params)
     }
 
     private fun removeCropOverlay() {
@@ -1432,8 +1497,8 @@ class OverlayService : LifecycleService() {
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT,
         )
+        if (!safeAddOverlay(view, params, "位置标记")) return
         positionMaskView = view
-        wm.addView(view, params)
         bubbleHandler.postDelayed({ removePositionMask() }, POSITION_MARKER_VISIBLE_MS)
     }
 
@@ -1457,7 +1522,7 @@ class OverlayService : LifecycleService() {
             ais.isEmpty() && templates.isEmpty()) return
         val events: List<RecordedEvent> =
             touches.map { RecordedEvent.Touch(it) } +
-                pastes.map { RecordedEvent.Paste(it) } +
+                pastes.map { RecordedEvent.Paste(it.timestamp, it.text) } +
                 enters.map { RecordedEvent.Enter(it) } +
                 ais.map { RecordedEvent.Ai(it.start, it.end, it.prompt) } +
                 templates.map { RecordedEvent.ImageMatch(it.first, it.second) }
@@ -1496,6 +1561,7 @@ class OverlayService : LifecycleService() {
                     startY = 0f,
                     durationMs = 0L,
                     delayBeforeMs = delay,
+                    pasteText = ev.text,
                 )
                 is RecordedEvent.Ai -> Action(
                     scriptId = 0,
@@ -1558,7 +1624,7 @@ class OverlayService : LifecycleService() {
             override val timestamp: Long get() = raw.timestamp
             override val endTimestamp: Long get() = raw.timestamp + raw.durationMs
         }
-        data class Paste(override val timestamp: Long) : RecordedEvent {
+        data class Paste(override val timestamp: Long, val text: String?) : RecordedEvent {
             override val endTimestamp: Long get() = timestamp
         }
         data class Enter(override val timestamp: Long) : RecordedEvent {
@@ -1575,6 +1641,7 @@ class OverlayService : LifecycleService() {
     }
 
     private data class RecordedAiStep(val start: Long, val prompt: String, var end: Long)
+    private data class RecordedPasteStep(val timestamp: Long, val text: String?)
 
     /** 记录所选脚本：更新内存状态、持久化 id、刷新面板标签。 */
     private fun setSelectedScript(id: Long, name: String?) {
@@ -1736,7 +1803,7 @@ class OverlayService : LifecycleService() {
                 dismissScriptPicker(); true
             } else false
         }
-        wm.addView(scroller, params)
+        if (!safeAddOverlay(scroller, params, "脚本选择器")) return
         scriptPickerView = scroller
     }
 
@@ -1805,9 +1872,17 @@ class OverlayService : LifecycleService() {
         scriptPickerView = null
     }
 
-    private fun launchHome(scriptIdToEdit: Long?, createNewScript: Boolean = false) {
+    private fun launchHome(
+        scriptIdToEdit: Long?,
+        createNewScript: Boolean = false,
+        togglePrevious: Boolean = false,
+    ) {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            if (togglePrevious && ServiceBus.mainActivityInForeground.value) {
+                putExtra(MainActivity.EXTRA_RETURN_TO_PREVIOUS, true)
+                return@apply
+            }
             if (scriptIdToEdit != null) {
                 putExtra(MainActivity.EXTRA_EDIT_SCRIPT_ID, scriptIdToEdit)
             }
@@ -1875,6 +1950,7 @@ class OverlayService : LifecycleService() {
     }
 
     companion object {
+        private const val TAG = "OverlayService"
         private const val NOTIF_ID = 0x10A2
         // 切 FLAG_NOT_TOUCHABLE 后等它经 WindowManager 落地的时间，之后再注入。约 4 帧。
         private const val FLAG_APPLY_DELAY_MS = 64L

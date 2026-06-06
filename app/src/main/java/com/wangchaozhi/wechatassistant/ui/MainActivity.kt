@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -45,13 +47,16 @@ import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -75,11 +80,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
@@ -120,6 +127,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = true
+            isAppearanceLightNavigationBars = true
+        }
         onBackPressedDispatcher.addCallback(this) {
             if (viewModel.screen.value != Screen.Home) viewModel.back() else finish()
         }
@@ -132,6 +143,7 @@ class MainActivity : ComponentActivity() {
                         Screen.Home -> MainScreen(
                             viewModel = viewModel,
                             onOpenEditor = { id -> viewModel.navigate(Screen.Editor(id)) },
+                            onOpenTriggers = { id -> viewModel.navigate(Screen.Triggers(id)) },
                             onOpenHistory = { viewModel.navigate(Screen.History) },
                             onOpenSettings = { viewModel.navigate(Screen.Settings) },
                             onCreateScript = {
@@ -159,6 +171,11 @@ class MainActivity : ComponentActivity() {
                             viewModel = viewModel,
                             onBack = viewModel::back,
                         )
+                        is Screen.Triggers -> TriggersScreen(
+                            scriptId = s.scriptId,
+                            viewModel = viewModel,
+                            onBack = viewModel::back,
+                        )
                         Screen.History -> HistoryScreen(
                             viewModel = viewModel,
                             onBack = viewModel::back,
@@ -179,7 +196,21 @@ class MainActivity : ComponentActivity() {
         handleLaunchIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        ServiceBus.mainActivityInForeground.value = true
+    }
+
+    override fun onPause() {
+        ServiceBus.mainActivityInForeground.value = false
+        super.onPause()
+    }
+
     private fun handleLaunchIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_RETURN_TO_PREVIOUS, false) == true) {
+            moveTaskToBack(true)
+            return
+        }
         val id = intent?.getLongExtra(EXTRA_EDIT_SCRIPT_ID, -1L) ?: -1L
         val createNew = intent?.getBooleanExtra(EXTRA_NEW_SCRIPT, false) == true
         val requestCapture = intent?.getBooleanExtra(EXTRA_REQUEST_CAPTURE, false) == true
@@ -222,6 +253,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_EDIT_SCRIPT_ID = "extra_edit_script_id"
         const val EXTRA_NEW_SCRIPT = "extra_new_script"
         const val EXTRA_REQUEST_CAPTURE = "extra_request_capture"
+        const val EXTRA_RETURN_TO_PREVIOUS = "extra_return_to_previous"
     }
 }
 
@@ -230,6 +262,7 @@ class MainActivity : ComponentActivity() {
 private fun MainScreen(
     viewModel: MainViewModel,
     onOpenEditor: (Long) -> Unit,
+    onOpenTriggers: (Long) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenSettings: () -> Unit,
     onCreateScript: () -> Unit,
@@ -248,6 +281,7 @@ private fun MainScreen(
     val overlayReady by viewModel.overlayReady.collectAsState()
     val playerState by viewModel.playerState.collectAsState()
     val lastAnswer by viewModel.lastAiAnswer.collectAsState()
+    val selectedScriptId by viewModel.selectedScriptId.collectAsState()
     val recordModeDescription = recordingModeDescription(viewModel.recordEngine)
 
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
@@ -269,7 +303,7 @@ private fun MainScreen(
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
+                    containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.94f),
                     titleContentColor = MaterialTheme.colorScheme.onBackground,
                 ),
                 title = {
@@ -296,9 +330,18 @@ private fun MainScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.34f),
+                            MaterialTheme.colorScheme.background,
+                            MaterialTheme.colorScheme.background,
+                        )
+                    )
+                )
                 .padding(inner),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(start = 16.dp, top = 12.dp, end = 16.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             item {
                 HeroStatusCard(
@@ -354,8 +397,10 @@ private fun MainScreen(
             items(scripts, key = { it.id }) { s ->
                 ScriptItem(
                     script = s,
-                    onPlay = { viewModel.play(s.id) },
+                    selected = s.id == selectedScriptId,
+                    onSelect = { viewModel.selectScript(s.id) },
                     onEdit = { onOpenEditor(s.id) },
+                    onTriggers = { onOpenTriggers(s.id) },
                     onDelete = { viewModel.delete(s.id) },
                 )
             }
@@ -387,21 +432,42 @@ private fun HeroStatusCard(
     onStopCapture: () -> Unit,
 ) {
     val playing = playerState is com.wangchaozhi.wechatassistant.service.ServiceBus.PlayerState.Playing
+    val ready = readyCount(accessibilityReady, overlayReady, captureReady)
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f),
         ),
     ) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Filled.TouchApp,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.size(34.dp),
+        Column(
+            Modifier
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.primaryContainer,
+                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.82f),
+                        )
+                    )
                 )
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.42f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Filled.TouchApp,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(30.dp),
+                    )
+                }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -411,11 +477,16 @@ private fun HeroStatusCard(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        "${scripts.size} 个脚本 · ${readyCount(accessibilityReady, overlayReady, captureReady)}/3 项服务就绪",
+                        "${scripts.size} 个脚本 · $ready/3 项服务就绪",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HeroMetric("脚本", scripts.size.toString(), Modifier.weight(1f))
+                HeroMetric("服务", "$ready/3", Modifier.weight(1f))
+                HeroMetric("状态", if (playing) "运行" else "空闲", Modifier.weight(1f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val overlayEnabled = overlayReady || (accessibilityReady && captureReady)
@@ -424,6 +495,10 @@ private fun HeroStatusCard(
                     enabled = overlayEnabled,
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
                 ) {
                     Icon(
                         if (overlayReady) Icons.Filled.Stop else Icons.Filled.TouchApp,
@@ -450,6 +525,28 @@ private fun HeroStatusCard(
 private fun readyCount(vararg values: Boolean): Int = values.count { it }
 
 @Composable
+private fun HeroMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.42f))
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            value,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+@Composable
 private fun PermissionsCard(
     notifGranted: Boolean,
     overlayGranted: Boolean,
@@ -464,6 +561,7 @@ private fun PermissionsCard(
     onStartOverlay: () -> Unit,
     onStopOverlay: () -> Unit,
 ) {
+    val ready = readyCount(notifGranted, overlayGranted, accessibilityReady, captureReady, overlayReady)
     ElevatedCard(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -471,8 +569,34 @@ private fun PermissionsCard(
             containerColor = MaterialTheme.colorScheme.surface,
         ),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            SectionHeader(title = "权限与服务", subtitle = "录制、回放、AI 截图的运行条件")
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SectionHeader(
+                    title = "权限与服务",
+                    subtitle = "录制、回放、AI 截图的运行条件",
+                    modifier = Modifier.weight(1f),
+                )
+                StatusPill("$ready/5 就绪", ready == 5)
+            }
+            if (ready == 0) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                )
+            } else {
+                LinearProgressIndicator(
+                    progress = { ready / 5f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                )
+            }
 
             PermRow(
                 title = "通知权限",
@@ -515,7 +639,9 @@ private fun PermRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f))
+            .padding(horizontal = 10.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StatusDot(ok = action == null || action.first == "停止")
@@ -543,16 +669,53 @@ private fun StatusDot(ok: Boolean) {
     val color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
     Box(
         modifier = Modifier
-            .size(22.dp)
+            .size(28.dp)
             .clip(CircleShape),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            if (ok) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
-            contentDescription = null,
-            tint = color,
-            modifier = Modifier.size(20.dp),
-        )
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(color.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                if (ok) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(19.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusPill(text: String, ok: Boolean) {
+    val color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = color,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(color.copy(alpha = 0.12f))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    )
+}
+
+@Composable
+private fun SoftIconTile(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.62f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
     }
 }
 
@@ -576,7 +739,7 @@ private fun PlayerStatusCard(
             },
         ),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SectionHeader(title = "运行状态", subtitle = if (playing) "脚本正在回放" else "当前空闲")
             if (playing) {
                 val p = state as
@@ -596,7 +759,21 @@ private fun PlayerStatusCard(
                     }
                 }
             } else {
-                Text("悬浮面板启动后，可在任意应用中使用 $recordModeDescription。")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SoftIconTile(Modifier.size(38.dp)) {
+                        Icon(
+                            Icons.Filled.TouchApp,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "悬浮面板启动后，可在任意应用中使用 $recordModeDescription。",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
             }
             if (!lastAnswer.isNullOrBlank()) {
                 HorizontalDivider()
@@ -615,16 +792,24 @@ private fun PlayerStatusCard(
 @Composable
 private fun ScriptItem(
     script: Script,
-    onPlay: () -> Unit,
+    selected: Boolean,
+    onSelect: () -> Unit,
     onEdit: () -> Unit,
+    onTriggers: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
     Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = onEdit,
+        onClick = onSelect,
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.54f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            },
+        ),
     ) {
         Row(
             Modifier
@@ -634,11 +819,19 @@ private fun ScriptItem(
         ) {
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(8.dp)),
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.TouchApp, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Icon(
+                    Icons.Filled.TouchApp,
+                    contentDescription = if (selected) "已选脚本" else null,
+                    tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
+                )
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -650,15 +843,16 @@ private fun ScriptItem(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "循环 ${script.loopCount} 次 · 速度 ${script.speed}x · ${formatScriptDate(script.createdAt)}",
+                    (if (selected) "已选 · " else "") +
+                        "循环 ${script.loopCount} 次 · 速度 ${script.speed}x · ${formatScriptDate(script.createdAt)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            IconButton(onClick = onPlay) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = "播放")
+            IconButton(onClick = onTriggers) {
+                Icon(Icons.Filled.Notifications, contentDescription = "触发器")
             }
             IconButton(onClick = onEdit) {
                 Icon(Icons.Filled.Edit, contentDescription = "编辑")
@@ -674,8 +868,8 @@ private fun ScriptItem(
 }
 
 @Composable
-private fun SectionHeader(title: String, subtitle: String) {
-    Column(Modifier.fillMaxWidth()) {
+private fun SectionHeader(title: String, subtitle: String, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth()) {
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Text(
             subtitle,
@@ -690,16 +884,18 @@ private fun EmptyScriptsCard(onCreateScript: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.74f)),
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Filled.TouchApp,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                    modifier = Modifier.size(30.dp),
-                )
+                SoftIconTile(Modifier.size(42.dp)) {
+                    Icon(
+                        Icons.Filled.TouchApp,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
                 Spacer(Modifier.width(12.dp))
                 Text(
                     "启动悬浮控制面板后，在屏幕上点击「录制」即可保存新的手势脚本；也可以直接新建一个空脚本手动编辑。",

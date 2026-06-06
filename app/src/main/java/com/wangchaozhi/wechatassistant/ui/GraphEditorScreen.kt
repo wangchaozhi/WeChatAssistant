@@ -40,6 +40,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -105,6 +106,7 @@ fun GraphEditorScreen(
     onBack: () -> Unit,
 ) {
     var script by remember { mutableStateOf<Script?>(null) }
+    val allScripts by viewModel.scripts.collectAsState()
     val nodes = remember { mutableStateListOf<Action>() }
     val edges = remember { mutableStateListOf<Edge>() }
     var loaded by remember { mutableStateOf(false) }
@@ -429,6 +431,7 @@ fun GraphEditorScreen(
                 onConfirm = { updated -> nodes[idx] = updated; editingId = null },
                 fetchModels = { viewModel.fetchModels(it) },
                 cachedModels = { viewModel.cachedModels(it) },
+                callableScripts = allScripts.filter { it.id != script?.id },
                 onClearTemplate = {
                     // 清空模板，下次「框选」即为重选(替换)，并会重新写入搜索范围 region。
                     pushUndo()
@@ -539,6 +542,7 @@ private fun NodeCard(
         ActionType.IF_IMAGE_EXISTS -> Color(0xFFE65100)
         ActionType.LOOP -> Color(0xFF00838F)
         ActionType.STOP -> Color(0xFFB71C1C)
+        ActionType.CALL_SCRIPT -> Color(0xFF4527A0)
         else -> Color(0xFF37474F)
     }
     Box(
@@ -582,6 +586,13 @@ private fun NodeCard(
             if (node.type == ActionType.LOOP) {
                 Text(
                     "× ${node.retryCount}",
+                    color = Color(0xCCFFFFFF),
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+            if (node.type == ActionType.CALL_SCRIPT) {
+                Text(
+                    if (node.callScriptId != null) "→ 脚本 #${node.callScriptId}" else "⚠ 未设目标",
                     color = Color(0xCCFFFFFF),
                     style = MaterialTheme.typography.labelSmall,
                 )
@@ -655,6 +666,7 @@ private val NODE_GROUPS: List<Pair<String, List<Pair<ActionType, String>>>> = li
     "流程控制" to listOf(
         ActionType.LOOP to "循环 N 次",
         ActionType.STOP to "停止",
+        ActionType.CALL_SCRIPT to "调用脚本",
     ),
 )
 

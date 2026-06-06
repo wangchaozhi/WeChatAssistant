@@ -22,6 +22,7 @@ enum class ActionType {
     IF_IMAGE_EXISTS,  // 模板图在当前屏幕是否存在；出口 port 0=找到 / 1=没找到。只判断不点击。
     LOOP,             // 计数循环：retryCount 为次数。出口 port 0=继续(回循环体) / 1=到次数(往下)。
     STOP,             // 终止整张图的执行（从任意分支提前结束）。
+    CALL_SCRIPT,      // 调用另一个脚本作为子流程：callScriptId 指向目标脚本。执行完回到出口 0 往下。
 }
 
 object ActionDefaults {
@@ -76,6 +77,10 @@ data class Action(
     // 为 null 表示跟随全局设置。
     val aiProvider: String? = null,
     val aiModel: String? = null,
+    // PASTE 节点专用：录制时捕获的剪贴板文本。为空时回放仍使用当前 AI 答案/剪贴板。
+    val pasteText: String? = null,
+    // CALL_SCRIPT 节点专用：要调用的目标脚本 id。为空时该节点跳过。
+    val callScriptId: Long? = null,
 )
 
 data class ScriptWithActions(
