@@ -112,9 +112,38 @@ jobs:
         shell: bash
         run: chmod +x gradlew
 
-      - name: Build APK
+      - name: Decode release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         shell: bash
-        run: ./gradlew :app:assembleDebug
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${ANDROID_KEYSTORE_BASE64}" ]]; then
+            echo "Missing required secret: ANDROID_KEYSTORE_BASE64" >&2
+            exit 1
+          fi
+
+          printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${RUNNER_TEMP}/release.keystore"
+
+      - name: Build APKs
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for name in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing required secret: ${name}" >&2
+              exit 1
+            fi
+          done
+
+          ./gradlew :app:assembleRelease :app:assembleDebug
 
       - name: Prepare release assets
         shell: bash
@@ -125,9 +154,12 @@ jobs:
           mkdir -p release
 
           APK_NAME="WeChatAssistant-${TAG_NAME}.apk"
+          DEBUG_APK_NAME="WeChatAssistant-${TAG_NAME}-debug.apk"
           CHANGELOG_NAME="WeChatAssistant-${TAG_NAME}-changelog.txt"
-          cp app/build/outputs/apk/debug/app-debug.apk "release/${APK_NAME}"
+          cp app/build/outputs/apk/release/app-release.apk "release/${APK_NAME}"
+          cp app/build/outputs/apk/debug/app-debug.apk "release/${DEBUG_APK_NAME}"
           (cd release && sha256sum "${APK_NAME}" > "${APK_NAME}.sha256")
+          (cd release && sha256sum "${DEBUG_APK_NAME}" > "${DEBUG_APK_NAME}.sha256")
 
           PREVIOUS_TAG="$(git tag --sort=-creatordate | grep -v "^${TAG_NAME}$" | head -n 1 || true)"
           {

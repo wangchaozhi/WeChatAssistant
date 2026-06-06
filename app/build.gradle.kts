@@ -13,6 +13,16 @@ val localProps = Properties().apply {
 }
 val qwenApiKey: String = localProps.getProperty("QWEN_API_KEY", "")
 val modelScopeApiKey: String = localProps.getProperty("MODELSCOPE_API_KEY", "")
+val releaseKeystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
+    ?.takeIf { it.isNotBlank() }
+    ?.let { file(it) }
+val releaseKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+val hasReleaseSigning = releaseKeystoreFile != null &&
+    !releaseKeystorePassword.isNullOrBlank() &&
+    !releaseKeyAlias.isNullOrBlank() &&
+    !releaseKeyPassword.isNullOrBlank()
 
 android {
     namespace = "com.wangchaozhi.wechatassistant"
@@ -26,8 +36,8 @@ android {
         applicationId = "com.wangchaozhi.wechatassistant"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "1.4.0"
+        versionCode = 21
+        versionName = "1.6.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -39,9 +49,28 @@ android {
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = releaseKeystoreFile
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
+
         release {
             isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
