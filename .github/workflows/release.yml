@@ -19,9 +19,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build and publish release assets
+  resolve:
+    name: Resolve release tag
     runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.resolve.outputs.tag_name }}
 
     steps:
       - name: Resolve tag
@@ -43,10 +45,16 @@ jobs:
 
           echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
 
+  release-apk:
+    name: Build and publish signed release APK
+    runs-on: ubuntu-latest
+    needs: resolve
+
+    steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.resolve.outputs.tag_name }}
+          ref: ${{ needs.resolve.outputs.tag_name }}
           fetch-depth: 0
 
       - name: Set up JDK
@@ -93,22 +101,102 @@ jobs:
             fi
           done
 
-          ./gradlew :app:assembleRelease :app:assembleDebug
+          ./gradlew :app:assembleRelease
 
-      - name: Prepare assets
+      - name: Prepare release assets
         shell: bash
         run: |
           set -euo pipefail
 
-          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+          TAG_NAME="${{ needs.resolve.outputs.tag_name }}"
           mkdir -p release
 
           APK_NAME="WeChatAssistant-${TAG_NAME}.apk"
-          DEBUG_APK_NAME="WeChatAssistant-${TAG_NAME}-debug.apk"
           CHANGELOG_NAME="WeChatAssistant-${TAG_NAME}-changelog.txt"
           cp app/build/outputs/apk/release/app-release.apk "release/${APK_NAME}"
-          cp app/build/outputs/apk/debug/app-debug.apk "release/${DEBUG_APK_NAME}"
           (cd release && sha256sum "${APK_NAME}" > "${APK_NAME}.sha256")
+
+          PREVIOUS_TAG="$(git tag --sort=-creatordate | grep -v "^${TAG_NAME}$" | head -n 1 || true)"
+          {
+            echo "WeChatAssistant ${TAG_NAME}"
+            echo
+            echo "Commit: $(git rev-parse HEAD)"
+            echo "Built at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo
+            if [[ -n "$PREVIOUS_TAG" ]]; then
+              echo "Changes since ${PREVIOUS_TAG}:"
+              git log --oneline --no-decorate "${PREVIOUS_TAG}..HEAD"
+            else
+              echo "Changes:"
+              git log --oneline --no-decorate HEAD
+            fi
+          } > "release/${CHANGELOG_NAME}"
+
+      - name: Publish release APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.resolve.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CHANGELOG="release/WeChatAssistant-${TAG_NAME}-changelog.txt"
+          APK_NAME="WeChatAssistant-${TAG_NAME}.apk"
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --notes-file "$CHANGELOG"
+          elif ! gh release create "$TAG_NAME" \
+              --title "$TAG_NAME" \
+              --notes-file "$CHANGELOG"; then
+            gh release edit "$TAG_NAME" --notes-file "$CHANGELOG"
+          fi
+
+          gh release upload "$TAG_NAME" \
+            "release/${APK_NAME}" \
+            "release/${APK_NAME}.sha256" \
+            "release/WeChatAssistant-${TAG_NAME}-changelog.txt" \
+            --clobber
+
+  debug-apk:
+    name: Build and publish debug APK
+    runs-on: ubuntu-latest
+    needs: resolve
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag_name }}
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        shell: bash
+        run: chmod +x gradlew
+
+      - name: Build debug APK
+        shell: bash
+        run: ./gradlew :app:assembleDebug
+
+      - name: Prepare debug assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG_NAME="${{ needs.resolve.outputs.tag_name }}"
+          mkdir -p release
+
+          DEBUG_APK_NAME="WeChatAssistant-${TAG_NAME}-debug.apk"
+          CHANGELOG_NAME="WeChatAssistant-${TAG_NAME}-changelog.txt"
+          cp app/build/outputs/apk/debug/app-debug.apk "release/${DEBUG_APK_NAME}"
           (cd release && sha256sum "${DEBUG_APK_NAME}" > "${DEBUG_APK_NAME}.sha256")
 
           PREVIOUS_TAG="$(git tag --sort=-creatordate | grep -v "^${TAG_NAME}$" | head -n 1 || true)"
@@ -127,19 +215,24 @@ jobs:
             fi
           } > "release/${CHANGELOG_NAME}"
 
-      - name: Publish GitHub Release
+      - name: Publish debug APK
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ steps.resolve.outputs.tag_name }}
+          TAG_NAME: ${{ needs.resolve.outputs.tag_name }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release edit "$TAG_NAME" --notes-file "release/WeChatAssistant-${TAG_NAME}-changelog.txt"
-            gh release upload "$TAG_NAME" release/* --clobber
-          else
-            gh release create "$TAG_NAME" release/* \
+          CHANGELOG="release/WeChatAssistant-${TAG_NAME}-changelog.txt"
+          DEBUG_APK_NAME="WeChatAssistant-${TAG_NAME}-debug.apk"
+
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
               --title "$TAG_NAME" \
-              --notes-file "release/WeChatAssistant-${TAG_NAME}-changelog.txt"
+              --notes-file "$CHANGELOG" || true
           fi
+
+          gh release upload "$TAG_NAME" \
+            "release/${DEBUG_APK_NAME}" \
+            "release/${DEBUG_APK_NAME}.sha256" \
+            --clobber
