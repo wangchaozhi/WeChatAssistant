@@ -62,6 +62,9 @@ class MainViewModel(
     private val _selectedScriptId = MutableStateFlow(settings.selectedScriptId)
     val selectedScriptId: StateFlow<Long> = _selectedScriptId.asStateFlow()
 
+    private val _recordEngine = MutableStateFlow(settings.recordEngine)
+    val recordEngineState: StateFlow<String> = _recordEngine.asStateFlow()
+
     private val _screen = MutableStateFlow<Screen>(Screen.Home)
     val screen: StateFlow<Screen> = _screen.asStateFlow()
 
@@ -122,8 +125,11 @@ class MainViewModel(
         set(value) { settings.aiImageMaxSide = value }
 
     var recordEngine: String
-        get() = settings.recordEngine
-        set(value) { settings.recordEngine = value }
+        get() = _recordEngine.value
+        set(value) {
+            settings.recordEngine = value
+            _recordEngine.value = settings.recordEngine
+        }
 
     var showPlaybackMarker: Boolean
         get() = settings.showPlaybackMarker

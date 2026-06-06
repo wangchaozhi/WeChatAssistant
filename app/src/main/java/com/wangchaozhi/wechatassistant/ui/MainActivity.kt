@@ -282,7 +282,8 @@ private fun MainScreen(
     val playerState by viewModel.playerState.collectAsState()
     val lastAnswer by viewModel.lastAiAnswer.collectAsState()
     val selectedScriptId by viewModel.selectedScriptId.collectAsState()
-    val recordModeDescription = recordingModeDescription(viewModel.recordEngine)
+    val recordEngine by viewModel.recordEngineState.collectAsState()
+    val recordModeDescription = recordingModeDescription(recordEngine)
 
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
     var notifGranted by remember { mutableStateOf(checkNotificationGranted(ctx)) }
@@ -799,6 +800,7 @@ private fun ScriptItem(
     onDelete: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
+    val createdAtText = remember(script.createdAt) { formatScriptDate(script.createdAt) }
     Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onSelect,
@@ -844,7 +846,7 @@ private fun ScriptItem(
                 )
                 Text(
                     (if (selected) "已选 · " else "") +
-                        "循环 ${script.loopCount} 次 · 速度 ${script.speed}x · ${formatScriptDate(script.createdAt)}",
+                        "循环 ${script.loopCount} 次 · 速度 ${script.speed}x · $createdAtText",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
