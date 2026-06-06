@@ -99,6 +99,14 @@ class SettingsRepository(context: Context) {
         get() = prefs.getLong(KEY_SELECTED_SCRIPT, -1L)
         set(value) = prefs.edit { putLong(KEY_SELECTED_SCRIPT, value) }
 
+    var overlayPanelX: Int
+        get() = prefs.getInt(KEY_OVERLAY_PANEL_X, -1)
+        set(value) = prefs.edit { putInt(KEY_OVERLAY_PANEL_X, value) }
+
+    var overlayPanelY: Int
+        get() = prefs.getInt(KEY_OVERLAY_PANEL_Y, -1)
+        set(value) = prefs.edit { putInt(KEY_OVERLAY_PANEL_Y, value) }
+
     // 回放时是否在屏幕上闪现点击/滑动/找图的位置标记。默认开，可在设置里关闭。
     var showPlaybackMarker: Boolean
         get() = prefs.getBoolean(KEY_SHOW_PLAYBACK_MARKER, true)
@@ -178,6 +186,8 @@ class SettingsRepository(context: Context) {
         const val RECORD_ENGINE_WIFI_ADB = "WIFI_ADB"
         private val RECORD_ENGINES = setOf(RECORD_ENGINE_OVERLAY, RECORD_ENGINE_WIFI_ADB)
         private const val KEY_SELECTED_SCRIPT = "overlay_selected_script_id"
+        private const val KEY_OVERLAY_PANEL_X = "overlay_panel_x"
+        private const val KEY_OVERLAY_PANEL_Y = "overlay_panel_y"
         private const val KEY_SHOW_PLAYBACK_MARKER = "show_playback_marker"
         private const val KEY_THEME_MODE = "theme_mode"
         const val THEME_SYSTEM = "SYSTEM"
