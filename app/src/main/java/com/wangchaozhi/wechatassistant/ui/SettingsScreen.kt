@@ -5,7 +5,9 @@ import android.graphics.Bitmap
 import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.Image
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -25,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -94,6 +97,7 @@ import com.wangchaozhi.wechatassistant.util.copyToClipboard
 import com.wangchaozhi.wechatassistant.util.WifiAdbNotification
 import com.wangchaozhi.wechatassistant.util.decodeSampledBitmap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -126,6 +130,18 @@ fun SettingsScreen(
         }
     }
 
+    val listState = rememberLazyListState()
+    // 从主页「长按设置」进来时，滚动到调试日志卡片并短暂高亮提示。
+    var highlightDebugLog by remember { mutableStateOf(false) }
+    LaunchedEffect(openDebugLog) {
+        if (openDebugLog) {
+            listState.scrollToItem(Int.MAX_VALUE) // 调试日志是列表最后一项
+            highlightDebugLog = true
+            delay(1600)
+            highlightDebugLog = false
+        }
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -143,6 +159,7 @@ fun SettingsScreen(
         },
     ) { inner ->
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize().padding(inner),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -205,7 +222,7 @@ fun SettingsScreen(
             if (recordEngine == SettingsRepository.RECORD_ENGINE_WIFI_ADB) {
                 item { WifiAdbCard(viewModel) }
             }
-            item { DebugLogCard(autoOpen = openDebugLog) }
+            item { DebugLogCard(highlight = highlightDebugLog) }
         }
     }
 }
@@ -771,7 +788,7 @@ fun WifiAdbCard(viewModel: MainViewModel) {
 }
 
 @Composable
-private fun DebugLogCard(autoOpen: Boolean = false) {
+private fun DebugLogCard(highlight: Boolean = false) {
     val context = LocalContext.current
     val app = remember(context) { App.from(context) }
     var showLog by remember { mutableStateOf(false) }
@@ -786,16 +803,16 @@ private fun DebugLogCard(autoOpen: Boolean = false) {
         debugImages = app.debugBitmapFiles()
     }
 
-    // 从主页「长按设置」进来时直接弹出日志。
-    LaunchedEffect(autoOpen) {
-        if (autoOpen) {
-            refreshLog()
-            showLog = true
-        }
-    }
+    // 从主页「长按设置」进来时，卡片描边短暂高亮，提示用户位置。
+    val borderColor by animateColorAsState(
+        targetValue = if (highlight) MaterialTheme.colorScheme.primary else Color.Transparent,
+        label = "debugLogHighlight",
+    )
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(2.dp, borderColor, RoundedCornerShape(8.dp)),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
