@@ -535,11 +535,13 @@ class OverlayService : LifecycleService() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = dp(8); y = dp(80)
+            val settings = App.from(this@OverlayService).settingsRepo
+            x = settings.overlayPanelX.takeIf { it >= 0 } ?: dp(8)
+            y = settings.overlayPanelY.takeIf { it >= 0 } ?: dp(80)
         }
         panelParams = params
 
-        attachDrag(container, params)
+        attachDrag(container, params, onDragEnd = { savePanelPosition(params) })
         if (!safeAddOverlay(container, params, "悬浮控制面板")) return false
         panelView = container
         return true
@@ -558,6 +560,7 @@ class OverlayService : LifecycleService() {
             val screenW = resources.displayMetrics.widthPixels
             p.x = (screenW - (panelView?.width ?: 0)).coerceAtLeast(0)
             runCatching { wm.updateViewLayout(panelView, p) }
+            savePanelPosition(p)
         }
     }
 
@@ -584,6 +587,7 @@ class OverlayService : LifecycleService() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
+                    if (moved) savePanelPosition(p)
                     if (!moved) clickAction()
                     true
                 }
@@ -604,6 +608,7 @@ class OverlayService : LifecycleService() {
             val w = panelView?.width ?: 0
             if (p.x + w > screenW) p.x = (screenW - w - dp(8)).coerceAtLeast(0)
             runCatching { wm.updateViewLayout(panelView, p) }
+            savePanelPosition(p)
         }
     }
 
@@ -787,6 +792,21 @@ class OverlayService : LifecycleService() {
         val panel = panelView
         panel?.getLocationOnScreen(loc)
         val screenW = resources.displayMetrics.widthPixels
+        val screenH = resources.displayMetrics.heightPixels
+        val margin = dp(8)
+        val gap = 0
+        root.measure(
+            View.MeasureSpec.makeMeasureSpec(screenW - margin * 2, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(screenH - margin * 2, View.MeasureSpec.AT_MOST),
+        )
+        val popupW = root.measuredWidth.takeIf { it > 0 } ?: dp(160)
+        val popupH = root.measuredHeight.takeIf { it > 0 } ?: dp(72)
+        val panelP = panelParams
+        val panelLeft = panelP?.x ?: loc.getOrElse(0) { margin }
+        val panelTop = panelP?.y ?: loc.getOrElse(1) { dp(80) }
+        val panelBottom = panelTop + (panel?.height ?: 0)
+        val belowY = panelBottom + gap
+        val aboveY = panelTop - popupH - gap
         val params = WindowManager.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -797,12 +817,14 @@ class OverlayService : LifecycleService() {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = loc[0].coerceIn(dp(8), (screenW - dp(160)).coerceAtLeast(dp(8)))
-            y = (loc[1] + (panel?.height ?: 0) + dp(6)).coerceAtLeast(dp(8))
+            x = panelLeft.coerceIn(margin, (screenW - popupW - margin).coerceAtLeast(margin))
+            y = if (belowY + popupH <= screenH - margin) {
+                belowY
+            } else {
+                aboveY.coerceAtLeast(margin)
+            }
         }
-        root.setOnTouchListener { _, e ->
-            if (e.action == MotionEvent.ACTION_OUTSIDE) { dismissRecordResult(); true } else false
-        }
+        attachDrag(root, params) { dismissRecordResult() }
         if (!safeAddOverlay(root, params, "已保存弹窗")) return
         recordResultView = root
         recordResultText = text
@@ -897,27 +919,47 @@ class OverlayService : LifecycleService() {
         renameView = null
     }
 
-    private fun attachDrag(view: View, params: WindowManager.LayoutParams) {
+    private fun attachDrag(
+        view: View,
+        params: WindowManager.LayoutParams,
+        onOutside: (() -> Unit)? = null,
+        onDragEnd: (() -> Unit)? = null,
+    ) {
         var startX = 0; var startY = 0
         var downRawX = 0f; var downRawY = 0f
+        var moved = false
         view.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_OUTSIDE -> {
-                    false
+                    onOutside?.invoke()
+                    onOutside != null
                 }
                 MotionEvent.ACTION_DOWN -> {
                     startX = params.x; startY = params.y
                     downRawX = e.rawX; downRawY = e.rawY
+                    moved = false
                     false
                 }
                 MotionEvent.ACTION_MOVE -> {
                     params.x = startX + (e.rawX - downRawX).toInt()
                     params.y = startY + (e.rawY - downRawY).toInt()
                     wm.updateViewLayout(view, params)
+                    moved = true
                     true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (moved) onDragEnd?.invoke()
+                    false
                 }
                 else -> false
             }
+        }
+    }
+
+    private fun savePanelPosition(params: WindowManager.LayoutParams) {
+        App.from(this).settingsRepo.apply {
+            overlayPanelX = params.x
+            overlayPanelY = params.y
         }
     }
 
