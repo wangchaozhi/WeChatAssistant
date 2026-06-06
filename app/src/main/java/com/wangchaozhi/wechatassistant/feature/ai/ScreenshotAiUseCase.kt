@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.service.ServiceBus
-import com.wangchaozhi.wechatassistant.util.copyToClipboard
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -46,7 +45,6 @@ class ScreenshotAiUseCase(
         val (usedProvider, usedModel) = vision.resolve(provider, model)
         val result = vision.ask(bitmap, effective, provider, model, maxSide = maxSide, quality = quality)
         result.onSuccess { answer ->
-            context.copyToClipboard(answer)
             ServiceBus.lastAiAnswer.value = answer
             runCatching {
                 history.save(bitmap, effective, answer, scriptId, usedProvider.name, usedModel)
