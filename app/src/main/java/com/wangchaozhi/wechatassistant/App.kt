@@ -39,6 +39,7 @@ class App : Application() {
                 AppDatabase.MIGRATION_10_11,
                 AppDatabase.MIGRATION_11_12,
                 AppDatabase.MIGRATION_12_13,
+                AppDatabase.MIGRATION_13_14,
             )
             .fallbackToDestructiveMigration()
             .build()

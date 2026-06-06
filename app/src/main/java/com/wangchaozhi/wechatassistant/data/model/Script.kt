@@ -31,6 +31,8 @@ object ActionDefaults {
     // 找图节点「等目标出现 + 等画面停稳」的总预算（超时）。流式判稳本身要数百毫秒，留足余量。
     const val DEFAULT_IMAGE_DELAY_MS = 1500L
     const val DEFAULT_IMAGE_DOWN_FALLBACK_PX = 150
+    // 上方容错默认关闭：仅在严格区域+下方兜底都没命中后，才按需向上再补一段搜索。0=不向上补。
+    const val DEFAULT_IMAGE_UP_FALLBACK_PX = 0
 }
 
 @Entity(
@@ -65,6 +67,9 @@ data class Action(
     // WAIT_PAGE_CHANGE 专用：页面未变化时，最多重试的次数；用尽仍未变化则继续往下。
     // 该节点用 durationMs 作为每次重试之间的轮询间隔(ms)。
     val retryCount: Int = 10,
+    // IMAGE_MATCH / IF_IMAGE_EXISTS 专用：上方容错(px，基于 3200 高基准缩放)。
+    // 严格区域 + 下方容错都没命中后，再在「区域 + 向上扩这一段」里补搜一次。0=关闭。
+    val upFallbackPx: Int = ActionDefaults.DEFAULT_IMAGE_UP_FALLBACK_PX,
     // WAIT_PAGE_CHANGE 专用：每次重试时回头重复执行「前几步」(默认 1=仅上一步)。
     // 例如「点出去 + 点进来」两步循环，设为 2。
     val repeatPrevSteps: Int = 1,

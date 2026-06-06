@@ -64,6 +64,7 @@ class TemplateMatchUseCase(
         region: Rect? = null,
         debugName: String? = null,
         downFallbackBasePx: Int = ActionDefaults.DEFAULT_IMAGE_DOWN_FALLBACK_PX,
+        upFallbackBasePx: Int = ActionDefaults.DEFAULT_IMAGE_UP_FALLBACK_PX,
     ): Result<MatchResult> {
         if (!ensureOpenCv()) {
             return Result.failure(IllegalStateException("OpenCV 初始化失败。"))
@@ -82,7 +83,7 @@ class TemplateMatchUseCase(
         } ?: return Result.failure(IllegalStateException("截图超时。"))
 
         return withContext(Dispatchers.Default) {
-            match(screen, template, threshold, region, debugName, downFallbackBasePx)
+            match(screen, template, threshold, region, debugName, downFallbackBasePx, upFallbackBasePx)
         }
     }
 
@@ -93,6 +94,7 @@ class TemplateMatchUseCase(
         region: Rect? = null,
         debugName: String? = null,
         downFallbackBasePx: Int = ActionDefaults.DEFAULT_IMAGE_DOWN_FALLBACK_PX,
+        upFallbackBasePx: Int = ActionDefaults.DEFAULT_IMAGE_UP_FALLBACK_PX,
     ): Result<MultiMatchResult> {
         if (!ensureOpenCv()) {
             return Result.failure(IllegalStateException("OpenCV 初始化失败。"))
@@ -111,7 +113,7 @@ class TemplateMatchUseCase(
             ServiceBus.lastBitmap.first { it != null }!!
         } ?: return Result.failure(IllegalStateException("截图超时。"))
 
-        return locateAnyIn(screen, paths, threshold, region, debugName, downFallbackBasePx)
+        return locateAnyIn(screen, paths, threshold, region, debugName, downFallbackBasePx, upFallbackBasePx)
     }
 
     /** 在指定截图上匹配多张模板；调用方负责管理 [screen] 的生命周期。 */
@@ -122,6 +124,7 @@ class TemplateMatchUseCase(
         region: Rect? = null,
         debugName: String? = null,
         downFallbackBasePx: Int = ActionDefaults.DEFAULT_IMAGE_DOWN_FALLBACK_PX,
+        upFallbackBasePx: Int = ActionDefaults.DEFAULT_IMAGE_UP_FALLBACK_PX,
     ): Result<MultiMatchResult> {
         if (!ensureOpenCv()) {
             return Result.failure(IllegalStateException("OpenCV 初始化失败。"))
@@ -152,6 +155,7 @@ class TemplateMatchUseCase(
                             index,
                             path,
                             downFallbackBasePx,
+                            upFallbackBasePx,
                         ).getOrNull()
                     }
                     .maxByOrNull { it.score }
@@ -190,13 +194,14 @@ class TemplateMatchUseCase(
         region: Rect?,
         debugName: String?,
         downFallbackBasePx: Int,
+        upFallbackBasePx: Int,
     ): Result<MatchResult> {
         if (template.width > screen.width || template.height > screen.height) {
             return Result.failure(
                 IllegalStateException("模板比屏幕还大，无法匹配（模板需与截图同分辨率）。")
             )
         }
-        val candidate = matchCandidate(screen, template, threshold, region, 0, "", downFallbackBasePx).getOrElse {
+        val candidate = matchCandidate(screen, template, threshold, region, 0, "", downFallbackBasePx, upFallbackBasePx).getOrElse {
             return Result.failure(it)
         }
         if (debugName != null) {
@@ -225,6 +230,7 @@ class TemplateMatchUseCase(
         index: Int,
         templatePath: String,
         downFallbackBasePx: Int,
+        upFallbackBasePx: Int,
     ): Result<Candidate> {
         if (template.width > screen.width || template.height > screen.height) {
             return Result.failure(
@@ -239,6 +245,9 @@ class TemplateMatchUseCase(
         var fallbackSearch: Bitmap? = null
         var fallbackOx = 0
         var fallbackOy = 0
+        var upSearch: Bitmap? = null
+        var upOx = 0
+        var upOy = 0
         if (region != null && region.right > region.left && region.bottom > region.top) {
             val dm = context.resources.displayMetrics
             val sx = screen.width.toFloat() / dm.widthPixels.coerceAtLeast(1)
@@ -257,6 +266,15 @@ class TemplateMatchUseCase(
                     fallbackOx = x0
                     fallbackOy = y0
                     fallbackSearch = Bitmap.createBitmap(screen, x0, y0, x1 - x0, y2 - y0)
+                }
+                // 上方容错：区域上沿向上扩一段（下沿仍为 y1），作为最后一档兜底。
+                val upFallbackPx = (upFallbackBasePx.coerceAtLeast(0) * screen.height / BASE_SCREEN_HEIGHT)
+                    .roundToInt()
+                val yUp = (y0 - upFallbackPx).coerceAtLeast(0)
+                if (y1 - yUp > y1 - y0 && y1 - yUp >= template.height) {
+                    upOx = x0
+                    upOy = yUp
+                    upSearch = Bitmap.createBitmap(screen, x0, yUp, x1 - x0, y1 - yUp)
                 }
             }
         }
@@ -294,13 +312,16 @@ class TemplateMatchUseCase(
         }
 
         try {
-            val first = runMatch(search, ox, oy)
-            val fallback = if (!first.found) {
+            // 先紧后松、分方向兜底：严格区域 → 向下扩 → 向上扩，每档仅在仍未命中时才跑，取分最高者。
+            var best = runMatch(search, ox, oy)
+            if (!best.found) {
                 fallbackSearch?.let { runMatch(it, fallbackOx, fallbackOy) }
-            } else {
-                null
+                    ?.let { if (it.score > best.score) best = it }
             }
-            val best = if (fallback != null && fallback.score > first.score) fallback else first
+            if (!best.found) {
+                upSearch?.let { runMatch(it, upOx, upOy) }
+                    ?.let { if (it.score > best.score) best = it }
+            }
             return Result.success(
                 Candidate(
                     index = best.index,
@@ -316,6 +337,7 @@ class TemplateMatchUseCase(
         } finally {
             if (search !== screen) search.recycle()
             fallbackSearch?.recycle()
+            upSearch?.recycle()
         }
     }
 

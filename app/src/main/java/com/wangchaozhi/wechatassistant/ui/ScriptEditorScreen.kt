@@ -590,6 +590,7 @@ internal fun EditActionDialog(
                 action.retryCount.toString()
         )
     }
+    var upRetry by remember { mutableStateOf(action.upFallbackPx.toString()) }
     var repeatSteps by remember { mutableStateOf(action.repeatPrevSteps.toString()) }
     var alias by remember { mutableStateOf(action.alias.orEmpty()) }
     // CALL_SCRIPT：选中的目标脚本 id。
@@ -750,6 +751,8 @@ internal fun EditActionDialog(
                     Spacer(Modifier.height(6.dp))
                     NumField(threshold, { threshold = it }, "识别精度 (0~100，越大越严格)", Modifier.fillMaxWidth())
                     Spacer(Modifier.height(6.dp))
+                    NumField(upRetry, { upRetry = it }, "上方容错 (px，0=关闭)", Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
                     NumField(retry, { retry = it }, "下方容错 (px，0=关闭)", Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -786,6 +789,8 @@ internal fun EditActionDialog(
                     val hasTemplate = templateCount(action.templatePath) > 0
                     Spacer(Modifier.height(6.dp))
                     NumField(threshold, { threshold = it }, "识别精度 (0~100，越大越严格)", Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    NumField(upRetry, { upRetry = it }, "上方容错 (px，0=关闭)", Modifier.fillMaxWidth())
                     Spacer(Modifier.height(6.dp))
                     NumField(retry, { retry = it }, "下方容错 (px，0=关闭)", Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
@@ -867,6 +872,7 @@ internal fun EditActionDialog(
                         else
                             threshold.toFloatOrNull()?.coerceIn(0.1f, 1f) ?: action.matchThreshold,
                         retryCount = retry.toIntOrNull()?.coerceAtLeast(0) ?: action.retryCount,
+                        upFallbackPx = upRetry.toIntOrNull()?.coerceAtLeast(0) ?: action.upFallbackPx,
                         repeatPrevSteps = repeatSteps.toIntOrNull()?.coerceAtLeast(1)
                             ?: action.repeatPrevSteps,
                         templatePath = action.templatePath,

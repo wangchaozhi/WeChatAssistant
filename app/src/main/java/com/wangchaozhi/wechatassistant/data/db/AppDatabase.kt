@@ -26,7 +26,8 @@ class Converters {
     // v10：移除 AI_TAP / SNAPSHOT / IF_PAGE_CHANGED / IF_TEXT_EXISTS 四种节点，ActionType 序号重排。
     // 不提供 9→10 迁移，靠 fallbackToDestructiveMigration 销毁重建（旧脚本数据按需求一并清空）。
     // v12：CALL_SCRIPT 节点新增 callScriptId 列。v13：新增 triggers 触发器表。
-    version = 13,
+    // v14：找图节点新增 upFallbackPx（上方容错）列。
+    version = 14,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -97,6 +98,13 @@ abstract class AppDatabase : RoomDatabase() {
                         "FOREIGN KEY(scriptId) REFERENCES scripts(id) ON DELETE CASCADE)"
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_triggers_scriptId ON triggers(scriptId)")
+            }
+        }
+
+        // 找图节点新增「上方容错」列，保留已有脚本数据（默认 0=关闭，行为不变）。
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE actions ADD COLUMN upFallbackPx INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

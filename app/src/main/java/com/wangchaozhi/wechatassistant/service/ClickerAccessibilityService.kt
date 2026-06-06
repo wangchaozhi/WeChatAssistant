@@ -357,6 +357,7 @@ class ClickerAccessibilityService : AccessibilityService() {
                             region,
                             dbg,
                             imageDownFallbackPx(node),
+                            imageUpFallbackPx(node),
                         )
                     } else {
                         Result.failure(IllegalStateException("未设置模板图"))
@@ -522,6 +523,7 @@ class ClickerAccessibilityService : AccessibilityService() {
         if (budgetMs <= 0L) return null
         val matcher = App.from(this@ClickerAccessibilityService).templateMatch
         val fallbackPx = imageDownFallbackPx(action)
+        val upFallbackPx = imageUpFallbackPx(action)
         // 幂等开流（已在流式则空操作）；由 runGraph 的 finally 统一 StopStream。
         ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.StartStream)
         return withTimeoutOrNull(budgetMs) {
@@ -538,6 +540,7 @@ class ClickerAccessibilityService : AccessibilityService() {
                     action.matchThreshold,
                     region,
                     downFallbackBasePx = fallbackPx,
+                    upFallbackBasePx = upFallbackPx,
                 ).getOrNull()
                 if (cur == null) {
                     // 没匹配到（还没出现 / 过渡中对不上）：立即判否，重新累计。
@@ -575,6 +578,8 @@ class ClickerAccessibilityService : AccessibilityService() {
         } else {
             action.retryCount.coerceAtLeast(0)
         }
+
+    private fun imageUpFallbackPx(action: Action): Int = action.upFallbackPx.coerceAtLeast(0)
 
     private fun fullScreenRect(): android.graphics.Rect {
         val dm = resources.displayMetrics
@@ -646,6 +651,7 @@ class ClickerAccessibilityService : AccessibilityService() {
                             region,
                             dbg,
                             imageDownFallbackPx(action),
+                            imageUpFallbackPx(action),
                         )
                         .getOrNull()
                 }
