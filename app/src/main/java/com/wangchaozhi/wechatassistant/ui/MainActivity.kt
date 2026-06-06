@@ -15,6 +15,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,6 +70,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -138,7 +140,22 @@ class MainActivity : ComponentActivity() {
         }
         handleLaunchIntent(intent)
         setContent {
-            WcaTheme {
+            val themeMode by viewModel.themeModeState.collectAsState()
+            val systemDark = isSystemInDarkTheme()
+            val pandaTheme = themeMode == SettingsRepository.THEME_PANDA
+            val darkTheme = when (themeMode) {
+                SettingsRepository.THEME_LIGHT -> false
+                SettingsRepository.THEME_DARK -> true
+                SettingsRepository.THEME_PANDA -> false
+                else -> systemDark
+            }
+            SideEffect {
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !darkTheme
+                    isAppearanceLightNavigationBars = !darkTheme
+                }
+            }
+            WcaTheme(darkTheme = darkTheme, pandaTheme = pandaTheme) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val screen by viewModel.screen.collectAsState()
                     when (val s = screen) {

@@ -35,8 +35,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.GpsFixed
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.TouchApp
@@ -72,6 +74,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -122,6 +125,7 @@ fun SettingsScreen(
     var modelScopeCachedModels by remember { mutableStateOf(viewModel.cachedModels(AiProvider.MODELSCOPE)) }
     var recordEngine by remember { mutableStateOf(viewModel.recordEngine) }
     var showPlaybackMarker by remember { mutableStateOf(viewModel.showPlaybackMarker) }
+    var themeMode by remember { mutableStateOf(viewModel.themeMode) }
 
     LaunchedEffect(Unit) {
         if (!viewModel.settingsModelsFetchedThisRun) {
@@ -148,7 +152,9 @@ fun SettingsScreen(
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
+                    containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.94f),
+                    titleContentColor = MaterialTheme.colorScheme.onBackground,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
                 ),
                 title = { Text("设置") },
                 navigationIcon = {
@@ -161,10 +167,27 @@ fun SettingsScreen(
     ) { inner ->
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().padding(inner),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.34f),
+                            MaterialTheme.colorScheme.background,
+                            MaterialTheme.colorScheme.background,
+                        ),
+                    ),
+                )
+                .padding(inner),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item {
+                ThemeCard(
+                    mode = themeMode,
+                    onMode = { themeMode = it; viewModel.themeMode = it },
+                )
+            }
             item {
                 DefaultProviderCard(
                     provider = defaultProvider,
@@ -213,17 +236,72 @@ fun SettingsScreen(
                     onEngine = { recordEngine = it; viewModel.recordEngine = it },
                 )
             }
+            // Wi-Fi ADB 配对卡片跟随「录制方式」展开，避免插到其它设置项下面。
+            if (recordEngine == SettingsRepository.RECORD_ENGINE_WIFI_ADB) {
+                item { WifiAdbCard(viewModel) }
+            }
             item {
                 PlaybackMarkerCard(
                     enabled = showPlaybackMarker,
                     onEnabled = { showPlaybackMarker = it; viewModel.showPlaybackMarker = it },
                 )
             }
-            // Wi-Fi ADB 配对卡片只在选了「Wi-Fi ADB 录制」时显示——悬浮层录制用不到它。
-            if (recordEngine == SettingsRepository.RECORD_ENGINE_WIFI_ADB) {
-                item { WifiAdbCard(viewModel) }
-            }
             item { DebugLogCard(highlight = highlightDebugLog) }
+        }
+    }
+}
+
+@Composable
+private fun ThemeCard(mode: String, onMode: (String) -> Unit) {
+    val options = listOf(
+        SettingsRepository.THEME_SYSTEM to "跟随系统",
+        SettingsRepository.THEME_LIGHT to "浅色",
+        SettingsRepository.THEME_DARK to "深色",
+        SettingsRepository.THEME_PANDA to "熊猫",
+    )
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SettingsIcon(Icons.Filled.Palette)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("主题", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "选择应用外观，重启后仍会保留",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.chunked(2).forEach { rowOptions ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowOptions.forEach { (value, label) ->
+                            val selected = mode == value
+                            if (selected) {
+                                Button(
+                                    onClick = { onMode(value) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.weight(1f),
+                                ) { Text(label) }
+                            } else {
+                                OutlinedButton(
+                                    onClick = { onMode(value) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.weight(1f),
+                                ) { Text(label) }
+                            }
+                        }
+                        if (rowOptions.size == 1) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -544,7 +622,7 @@ private fun PlaybackMarkerCard(enabled: Boolean, onEnabled: (Boolean) -> Unit) {
             Modifier.padding(16.dp).fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SettingsIcon(Icons.Filled.TouchApp)
+            SettingsIcon(Icons.Filled.GpsFixed)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text("回放点击标记", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)

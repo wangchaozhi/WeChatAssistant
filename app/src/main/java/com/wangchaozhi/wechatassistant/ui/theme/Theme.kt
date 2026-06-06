@@ -53,9 +53,40 @@ private val Dark = darkColorScheme(
     outline = Color(0xFF8A938B),
 )
 
+private val Panda = lightColorScheme(
+    primary = Color(0xFF1F5F3B),
+    onPrimary = Color.White,
+    primaryContainer = Color(0xFFC7E8C9),
+    onPrimaryContainer = Color(0xFF07160D),
+    secondary = Color(0xFF2D3130),
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFE4E6DF),
+    onSecondaryContainer = Color(0xFF171918),
+    tertiary = Color(0xFF6B5A2A),
+    onTertiary = Color.White,
+    tertiaryContainer = Color(0xFFF2E5B8),
+    onTertiaryContainer = Color(0xFF211A05),
+    error = Color(0xFFB3261E),
+    background = Color(0xFFFAFAF2),
+    onBackground = Color(0xFF181A18),
+    surface = Color(0xFFFFFCF4),
+    onSurface = Color(0xFF181A18),
+    surfaceVariant = Color(0xFFE4E6DF),
+    onSurfaceVariant = Color(0xFF444845),
+    outline = Color(0xFF747873),
+)
+
 @Composable
-fun WcaTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val colors: ColorScheme = if (darkTheme) Dark else Light
+fun WcaTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    pandaTheme: Boolean = false,
+    content: @Composable () -> Unit,
+) {
+    val colors: ColorScheme = when {
+        pandaTheme -> Panda
+        darkTheme -> Dark
+        else -> Light
+    }
     MaterialTheme(
         colorScheme = colors,
         content = content,

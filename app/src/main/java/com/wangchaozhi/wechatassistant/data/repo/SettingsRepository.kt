@@ -104,6 +104,12 @@ class SettingsRepository(context: Context) {
         get() = prefs.getBoolean(KEY_SHOW_PLAYBACK_MARKER, true)
         set(value) = prefs.edit { putBoolean(KEY_SHOW_PLAYBACK_MARKER, value) }
 
+    // 应用主题：跟随系统 / 浅色 / 深色。非法值回退到跟随系统。
+    var themeMode: String
+        get() = prefs.getString(KEY_THEME_MODE, THEME_SYSTEM).orEmpty()
+            .let { if (it in THEME_MODES) it else THEME_SYSTEM }
+        set(value) = prefs.edit { putString(KEY_THEME_MODE, value) }
+
     /**
      * 创建加密的 SharedPreferences。
      *
@@ -173,6 +179,12 @@ class SettingsRepository(context: Context) {
         private val RECORD_ENGINES = setOf(RECORD_ENGINE_OVERLAY, RECORD_ENGINE_WIFI_ADB)
         private const val KEY_SELECTED_SCRIPT = "overlay_selected_script_id"
         private const val KEY_SHOW_PLAYBACK_MARKER = "show_playback_marker"
+        private const val KEY_THEME_MODE = "theme_mode"
+        const val THEME_SYSTEM = "SYSTEM"
+        const val THEME_LIGHT = "LIGHT"
+        const val THEME_DARK = "DARK"
+        const val THEME_PANDA = "PANDA"
+        private val THEME_MODES = setOf(THEME_SYSTEM, THEME_LIGHT, THEME_DARK, THEME_PANDA)
         const val DEFAULT_MODEL = "qwen3.5-omni-flash"
         const val DEFAULT_MS_MODEL = "Qwen/Qwen3.5-122B-A10B"
         const val DEFAULT_PROVIDER = "DASHSCOPE"

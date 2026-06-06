@@ -65,6 +65,9 @@ class MainViewModel(
     private val _recordEngine = MutableStateFlow(settings.recordEngine)
     val recordEngineState: StateFlow<String> = _recordEngine.asStateFlow()
 
+    private val _themeMode = MutableStateFlow(settings.themeMode)
+    val themeModeState: StateFlow<String> = _themeMode.asStateFlow()
+
     private val _screen = MutableStateFlow<Screen>(Screen.Home)
     val screen: StateFlow<Screen> = _screen.asStateFlow()
 
@@ -134,6 +137,13 @@ class MainViewModel(
     var showPlaybackMarker: Boolean
         get() = settings.showPlaybackMarker
         set(value) { settings.showPlaybackMarker = value }
+
+    var themeMode: String
+        get() = _themeMode.value
+        set(value) {
+            settings.themeMode = value
+            _themeMode.value = settings.themeMode
+        }
 
     val wifiAdbState: StateFlow<WifiAdbManager.Status> = WifiAdbManager.state
 
