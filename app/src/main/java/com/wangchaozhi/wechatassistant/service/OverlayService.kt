@@ -82,9 +82,10 @@ class OverlayService : LifecycleService() {
     private var renameView: View? = null
     private var bubble: LinearLayout? = null
     private var bubbleText: TextView? = null
-    private var bubbleActions: LinearLayout? = null
-    private var bubbleRenameBtn: Button? = null
-    private var bubbleDeleteBtn: Button? = null
+    // 「已保存」二级弹窗：锚在面板下方的独立悬浮小窗（改名/删除/确定），不遮罩背景。
+    private var recordResultView: View? = null
+    private var recordResultText: TextView? = null
+    private var recordResultRenameBtn: Button? = null
     private val bubbleHandler = Handler(Looper.getMainLooper())
     private val hideBubble = Runnable { bubble?.visibility = View.GONE }
     private val recordedTouches = mutableListOf<ServiceBus.RawTouch>()
@@ -549,6 +550,7 @@ class OverlayService : LifecycleService() {
         collapsed = true
         panelContent?.visibility = View.GONE
         bubble?.visibility = View.GONE
+        dismissRecordResult()
         collapsedBar?.visibility = View.VISIBLE
         // 停靠到屏幕右边缘
         panelView?.post {
@@ -686,6 +688,7 @@ class OverlayService : LifecycleService() {
     }
 
     private fun buildBubble(ctx: Context): LinearLayout {
+        // 仅承载 AI 一闪而过的提示（请求中/结果），按钮型的「已保存」已抽成二级弹窗。
         val outer = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -696,41 +699,15 @@ class OverlayService : LifecycleService() {
             setTextColor(Color.WHITE)
             setPadding(dp(4), dp(2), dp(4), dp(2))
         }
-        val actions = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            visibility = View.GONE
-            setPadding(0, dp(4), 0, 0)
-        }
-        val renameBtn = smallBtn(ctx)
-        val deleteBtn = smallBtn(ctx)
-        val closeBtn = smallBtn(ctx).apply {
-            text = "确定"
-            setOnClickListener { hideBubbleNow() }
-        }
-        actions.addView(renameBtn)
-        actions.addView(deleteBtn)
-        actions.addView(closeBtn)
         outer.addView(status)
-        outer.addView(actions)
         bubble = outer
         bubbleText = status
-        bubbleActions = actions
-        bubbleRenameBtn = renameBtn
-        bubbleDeleteBtn = deleteBtn
         return outer
-    }
-
-    private fun hideBubbleNow() {
-        bubbleHandler.removeCallbacks(hideBubble)
-        bubble?.visibility = View.GONE
-        bubbleActions?.visibility = View.GONE
-        dismissRename()
     }
 
     private fun showBubbleLoading() {
         bubbleHandler.removeCallbacks(hideBubble)
         bubble?.visibility = View.VISIBLE
-        bubbleActions?.visibility = View.GONE
         bubbleText?.setTextColor(Color.WHITE)
         bubbleText?.text = "正在请求 AI…"
     }
@@ -738,7 +715,6 @@ class OverlayService : LifecycleService() {
     private fun renderAiResult(res: ServiceBus.AiResult) {
         bubbleHandler.removeCallbacks(hideBubble)
         bubble?.visibility = View.VISIBLE
-        bubbleActions?.visibility = View.GONE
         when (res) {
             is ServiceBus.AiResult.Success -> {
                 bubbleText?.setTextColor(Color.WHITE)
@@ -761,38 +737,84 @@ class OverlayService : LifecycleService() {
             ?.getItemAt(0)?.coerceToText(this)?.toString()?.takeIf { it.isNotEmpty() }
     }
 
+    /** 录制完成后的「已保存」二级弹窗：锚在面板下方的独立悬浮小窗，改名/删除/确定，不遮罩背景。 */
     private fun showRecordResult(scriptId: Long, scriptName: String) {
+        dismissRecordResult()
         // 记下录制前选中的脚本，删掉刚录的脚本时好恢复回去。
         val prevSelectedId = selectedScriptId
         // 录完即设为已选(并持久化)，按「▶」可直接回放，无需再「选」。
         setSelectedScript(scriptId, scriptName)
-        bubbleHandler.removeCallbacks(hideBubble)
-        bubble?.visibility = View.VISIBLE
-        bubbleText?.setTextColor(Color.WHITE)
-        bubbleText?.text = "已保存：$scriptName"
-        bubbleActions?.visibility = View.VISIBLE
-        bubbleRenameBtn?.apply {
-            text = "改名"
-            setOnClickListener { showRenameDialog(scriptId, scriptName) }
+        val ctx = this
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = panelGlassBg()
+            setPadding(dp(8), dp(6), dp(8), dp(6))
         }
-        bubbleDeleteBtn?.apply {
-            text = "删除"
-            setOnClickListener {
-                lifecycleScope.launch {
-                    App.from(this@OverlayService).scriptRepo.delete(scriptId)
-                    // 恢复到录制前选中的脚本；它要是也被删了/不存在就清空选中。
-                    val prev = prevSelectedId
-                        ?.takeIf { it != scriptId }
-                        ?.let { App.from(this@OverlayService).scriptRepo.load(it) }
-                    if (prev != null) {
-                        setSelectedScript(prev.script.id, prev.script.name)
-                    } else {
-                        clearSelectedScript()
-                    }
+        val text = TextView(ctx).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            setPadding(dp(4), dp(2), dp(4), dp(2))
+            this.text = "已保存：$scriptName"
+        }
+        val actions = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(6), 0, 0)
+        }
+        val renameBtn = compactBtn(ctx, "改名") { showRenameDialog(scriptId, scriptName) }
+        val deleteBtn = compactBtn(ctx, "删除") {
+            lifecycleScope.launch {
+                App.from(this@OverlayService).scriptRepo.delete(scriptId)
+                // 恢复到录制前选中的脚本；它要是也被删了/不存在就清空选中。
+                val prev = prevSelectedId
+                    ?.takeIf { it != scriptId }
+                    ?.let { App.from(this@OverlayService).scriptRepo.load(it) }
+                if (prev != null) {
+                    setSelectedScript(prev.script.id, prev.script.name)
+                } else {
+                    clearSelectedScript()
                 }
-                hideBubbleNow()
             }
+            dismissRecordResult()
         }
+        val okBtn = compactBtn(ctx, "确定") { dismissRecordResult() }
+        actions.addView(renameBtn)
+        actions.addView(deleteBtn)
+        actions.addView(okBtn)
+        root.addView(text)
+        root.addView(actions)
+
+        val loc = IntArray(2)
+        val panel = panelView
+        panel?.getLocationOnScreen(loc)
+        val screenW = resources.displayMetrics.widthPixels
+        val params = WindowManager.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = loc[0].coerceIn(dp(8), (screenW - dp(160)).coerceAtLeast(dp(8)))
+            y = (loc[1] + (panel?.height ?: 0) + dp(6)).coerceAtLeast(dp(8))
+        }
+        root.setOnTouchListener { _, e ->
+            if (e.action == MotionEvent.ACTION_OUTSIDE) { dismissRecordResult(); true } else false
+        }
+        if (!safeAddOverlay(root, params, "已保存弹窗")) return
+        recordResultView = root
+        recordResultText = text
+        recordResultRenameBtn = renameBtn
+    }
+
+    private fun dismissRecordResult() {
+        recordResultView?.let { runCatching { wm.removeView(it) } }
+        recordResultView = null
+        recordResultText = null
+        recordResultRenameBtn = null
+        dismissRename()
     }
 
     private fun showRenameDialog(scriptId: Long, currentName: String) {
@@ -837,8 +859,8 @@ class OverlayService : LifecycleService() {
                             selectedScriptName = newName
                             statusLabel?.post { refreshStatus() }
                         }
-                        bubbleText?.post { bubbleText?.text = "已保存：$newName" }
-                        bubbleRenameBtn?.setOnClickListener {
+                        recordResultText?.post { recordResultText?.text = "已保存：$newName" }
+                        recordResultRenameBtn?.setOnClickListener {
                             showRenameDialog(scriptId, newName)
                         }
                     }
@@ -2017,9 +2039,7 @@ class OverlayService : LifecycleService() {
         bubbleHandler.removeCallbacks(hideBubble)
         bubble = null
         bubbleText = null
-        bubbleActions = null
-        bubbleRenameBtn = null
-        bubbleDeleteBtn = null
+        dismissRecordResult()
         playStopBtn = null
         liveRegionPickBtn = null
         pendingLiveTemplatePickRequestId = null
