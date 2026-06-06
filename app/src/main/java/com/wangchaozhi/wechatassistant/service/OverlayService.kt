@@ -68,6 +68,8 @@ class OverlayService : LifecycleService() {
     private var statusLabel: TextView? = null
     private var statusScriptLabel: TextView? = null
     private var playStopBtn: Button? = null
+    private var editBtn: Button? = null
+    private var cancelRecBtn: Button? = null
     private var pickBtn: Button? = null
     private var shareBtn: Button? = null
     private var liveRegionPickBtn: Button? = null
@@ -408,9 +410,15 @@ class OverlayService : LifecycleService() {
         extraActionsRow = nodesRow
         // 「✎」：编辑当前所选脚本（未选时提示并弹列表，锚定到状态栏）。选脚本改到点状态栏「已选」。
         val btnEdit = compactBtn(ctx, "✎") { editSelectedScript(statusBox) }
+        editBtn = btnEdit
         // 「▶/停止」：播放已选脚本；播放中则停止。未选脚本时打开选择器引导先选。
         val btnPlayStop = compactBtn(ctx, "▶") { togglePlayStop(statusBox) }
         playStopBtn = btnPlayStop
+        // 「×」：取消录制并丢弃已录步骤；仅录制中显示，替代此时无意义的 ✎/▶。
+        val btnCancelRec = compactBtn(ctx, "×") { cancelRecording() }.apply {
+            visibility = View.GONE
+        }
+        cancelRecBtn = btnCancelRec
         val btnAi = compactBtn(ctx, "AI") {
             val prompt = App.from(ctx).settingsRepo.defaultPrompt
             // 录制中先记一步（即使此刻截图服务没开，回放时再截图问答），与粘贴/回车一致。
@@ -474,6 +482,7 @@ class OverlayService : LifecycleService() {
         topRow.addView(btnRec)
         topRow.addView(btnEdit)
         topRow.addView(btnPlayStop)
+        topRow.addView(btnCancelRec)
         nodesRow.addView(nodesLabel)
         nodesRow.addView(btnAi)
         nodesRow.addView(btnPaste)
@@ -919,6 +928,26 @@ class OverlayService : LifecycleService() {
         if (overlayEngine) toggleOverlayRecording(btn) else toggleAdbRecording(btn)
     }
 
+    /** 取消录制：停止采集并丢弃已录步骤，不保存为脚本（区别于「✓」完成保存）。 */
+    private fun cancelRecording() {
+        if (!recording) return
+        val overlayEngine =
+            App.from(this).settingsRepo.recordEngine != SettingsRepository.RECORD_ENGINE_WIFI_ADB
+        recording = false
+        recBtn?.text = "录制"
+        ServiceBus.recordingMode.value = false
+        ServiceBus.adbRecording.value = false
+        if (overlayEngine) removeRecordOverlay() else adbReader.stop()
+        ServiceBus.overlayCmd.tryEmit(ServiceBus.OverlayCmd.StopRecording)
+        recordedTouches.clear()
+        recordedPastes.clear()
+        recordedEnters.clear()
+        recordedAi.clear()
+        recordedTemplates.clear()
+        refreshStatus()
+        Toast.makeText(this, "已取消录制", Toast.LENGTH_SHORT).show()
+    }
+
     /** 悬浮层录制（默认）：全屏透明层捕获手势 +「边录边放」用无障碍投回真实 App。 */
     private fun toggleOverlayRecording(btn: Button) {
         if (!recording) {
@@ -1082,6 +1111,10 @@ class OverlayService : LifecycleService() {
         statusScriptLabel?.visibility = View.GONE
         // 选脚本按钮始终显示☰（功能恒为打开脚本列表），已选状态由右侧脚本名表达。
         pickBtn?.text = "☰"
+        // 录制中：✎/▶ 此刻无意义，隐藏并露出「×」取消录制。
+        editBtn?.visibility = if (recording) View.GONE else View.VISIBLE
+        playStopBtn?.visibility = if (recording) View.GONE else View.VISIBLE
+        cancelRecBtn?.visibility = if (recording) View.VISIBLE else View.GONE
         if (recording) {
             val captured = recordedTouches.size + recordedPastes.size +
                 recordedEnters.size + recordedAi.size +
