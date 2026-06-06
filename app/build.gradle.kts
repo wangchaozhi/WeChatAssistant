@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.androidx.baselineprofile)
 }
 
 val localProps = Properties().apply {
@@ -38,6 +39,9 @@ val appVersionCode: Int = gitText("rev-list", "--count", "HEAD")?.toIntOrNull() 
 val appVersionName: String = (findProperty("appVersionName") as String?)?.trim()?.ifEmpty { null }
     ?: gitText("describe", "--tags", "--abbrev=0")?.removePrefix("v")
     ?: "0.0-dev"
+val baselineProfileCi = providers.gradleProperty("wcaBaselineProfileCi")
+    .map(String::toBoolean)
+    .getOrElse(false)
 
 android {
     namespace = "com.wangchaozhi.wechatassistant"
@@ -60,8 +64,14 @@ android {
         buildConfigField("String", "MODELSCOPE_API_KEY", "\"$modelScopeApiKey\"")
 
         // OpenCV 自带各 ABI 的 native 库，体积较大（x86_64 的 .so 就 ~53MB）。
-        // 只保留真机用的 arm64-v8a；如需 x86_64 模拟器调试再临时加回。
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // 正式包只保留真机用的 arm64-v8a；GitHub 生成 Baseline Profile 时临时加回 x86_64 emulator。
+        ndk {
+            abiFilters += if (baselineProfileCi) {
+                listOf("arm64-v8a", "x86_64")
+            } else {
+                listOf("arm64-v8a")
+            }
+        }
     }
 
     signingConfigs {
@@ -83,8 +93,11 @@ android {
 
         release {
             isMinifyEnabled = false
-            if (hasReleaseSigning) {
-                signingConfig = signingConfigs.getByName("release")
+            // 本地/GitHub 生成 Baseline Profile 时没有 release keystore，使用 debug 签名保证可安装。
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
             }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -148,8 +161,11 @@ dependencies {
     implementation(libs.kadb)
 
     implementation(libs.opencv)
+    implementation(libs.androidx.profileinstaller)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+
+    baselineProfile(project(":baselineprofile"))
 }
