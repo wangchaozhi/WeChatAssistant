@@ -2,6 +2,9 @@ name: Generate Baseline Profile
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/baseline-profile-ci
 
 permissions:
   contents: read
