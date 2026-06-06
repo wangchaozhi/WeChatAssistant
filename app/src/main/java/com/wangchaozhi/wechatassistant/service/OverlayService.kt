@@ -319,7 +319,7 @@ class OverlayService : LifecycleService() {
     private fun showPanel(): Boolean {
         if (panelView != null) return true
         val ctx = this
-        val container = LinearLayout(ctx).apply {
+        val container = DraggablePanel(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = panelGlassBg()
             setPadding(dp(8), dp(6), dp(8), dp(6))
@@ -541,7 +541,8 @@ class OverlayService : LifecycleService() {
         }
         panelParams = params
 
-        attachDrag(container, params, onDragEnd = { savePanelPosition(params) })
+        container.dragParams = params
+        container.onDragEnd = { savePanelPosition(params) }
         if (!safeAddOverlay(container, params, "悬浮控制面板")) return false
         panelView = container
         return true
@@ -917,6 +918,68 @@ class OverlayService : LifecycleService() {
     private fun dismissRename() {
         renameView?.let { runCatching { wm.removeView(it) } }
         renameView = null
+    }
+
+    /**
+     * 展开态面板容器：子按钮会消费 ACTION_DOWN，靠事件冒泡的 [attachDrag] 在按钮上拖不动。
+     * 这里在手指移动超过阈值时由容器拦截触摸，做到「轻点按钮=点击、按住任意位置拖动=移动整个面板」。
+     * 折叠态仍交给各按钮自己的 [attachCollapsedDrag]，不在此拦截。
+     */
+    private inner class DraggablePanel(context: Context) : LinearLayout(context) {
+        var dragParams: WindowManager.LayoutParams? = null
+        var onDragEnd: (() -> Unit)? = null
+        private val slop = dp(6)
+        private var downRawX = 0f
+        private var downRawY = 0f
+        private var startX = 0
+        private var startY = 0
+        private var dragging = false
+
+        private fun recordDown(ev: MotionEvent) {
+            val p = dragParams ?: return
+            startX = p.x; startY = p.y
+            downRawX = ev.rawX; downRawY = ev.rawY
+            dragging = false
+        }
+
+        private fun movedBeyondSlop(ev: MotionEvent): Boolean =
+            abs(ev.rawX - downRawX) > slop || abs(ev.rawY - downRawY) > slop
+
+        override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            if (collapsed) return false
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> recordDown(ev)
+                MotionEvent.ACTION_MOVE -> if (!dragging && movedBeyondSlop(ev)) {
+                    dragging = true
+                    return true
+                }
+            }
+            return false
+        }
+
+        override fun onTouchEvent(ev: MotionEvent): Boolean {
+            val p = dragParams ?: return false
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    recordDown(ev)
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!dragging && movedBeyondSlop(ev)) dragging = true
+                    if (dragging) {
+                        p.x = startX + (ev.rawX - downRawX).toInt()
+                        p.y = startY + (ev.rawY - downRawY).toInt()
+                        runCatching { wm.updateViewLayout(this, p) }
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (dragging) onDragEnd?.invoke()
+                    return true
+                }
+            }
+            return false
+        }
     }
 
     private fun attachDrag(
