@@ -24,6 +24,21 @@ val hasReleaseSigning = releaseKeystoreFile != null &&
     !releaseKeyAlias.isNullOrBlank() &&
     !releaseKeyPassword.isNullOrBlank()
 
+// 版本号自动化（方案 B：tag 驱动）。
+//  versionName：CI 从 push 的 tag 注入（-PappVersionName=1.6.9）；本地构建回退到最近的 tag。
+//  versionCode：取 git 提交数，单调递增，本地与 CI 一致，无需手动维护。
+fun gitText(vararg args: String): String? = runCatching {
+    providers.exec {
+        commandLine("git", *args)
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().ifEmpty { null }
+}.getOrNull()
+
+val appVersionCode: Int = gitText("rev-list", "--count", "HEAD")?.toIntOrNull() ?: 23
+val appVersionName: String = (findProperty("appVersionName") as String?)?.trim()?.ifEmpty { null }
+    ?: gitText("describe", "--tags", "--abbrev=0")?.removePrefix("v")
+    ?: "0.0-dev"
+
 android {
     namespace = "com.wangchaozhi.wechatassistant"
     compileSdk {
@@ -36,8 +51,8 @@ android {
         applicationId = "com.wangchaozhi.wechatassistant"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "1.6.6"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

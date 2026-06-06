@@ -90,6 +90,7 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          TAG_NAME: ${{ needs.resolve.outputs.tag_name }}
         shell: bash
         run: |
           set -euo pipefail
@@ -101,7 +102,8 @@ jobs:
             fi
           done
 
-          ./gradlew :app:assembleRelease
+          # 版本号由 tag 注入：versionName=tag 去掉前缀 v，versionCode 由 build.gradle.kts 取提交数。
+          ./gradlew :app:assembleRelease -PappVersionName="${TAG_NAME#v}"
 
       - name: Prepare release assets
         shell: bash
@@ -183,8 +185,10 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build debug APK
+        env:
+          TAG_NAME: ${{ needs.resolve.outputs.tag_name }}
         shell: bash
-        run: ./gradlew :app:assembleDebug
+        run: ./gradlew :app:assembleDebug -PappVersionName="${TAG_NAME#v}"
 
       - name: Prepare debug assets
         shell: bash
