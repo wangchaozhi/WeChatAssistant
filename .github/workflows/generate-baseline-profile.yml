@@ -1,0 +1,47 @@
+name: Generate Baseline Profile
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Generate baseline profile
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: aosp_atd
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: ./gradlew :app:generateBaselineProfile -PwcaBaselineProfileCi=true --stacktrace
+
+      - name: Upload baseline profile artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-profile
+          if-no-files-found: warn
+          path: |
+            app/src/**/generated/baselineProfiles/**
+            app/build/generated/baselineProfiles/**
+            app/build/intermediates/**/baseline-prof*.txt
+            baselineprofile/build/outputs/androidTest-results/**
+            baselineprofile/build/outputs/connected_android_test_additional_output/**

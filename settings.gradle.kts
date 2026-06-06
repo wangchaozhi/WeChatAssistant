@@ -25,4 +25,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "WeChatAssistant"
 include(":app")
+include(":baselineprofile")
  
