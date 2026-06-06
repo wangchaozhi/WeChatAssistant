@@ -99,7 +99,11 @@ import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
+fun SettingsScreen(
+    viewModel: MainViewModel,
+    openDebugLog: Boolean = false,
+    onBack: () -> Unit,
+) {
     var apiKey by remember { mutableStateOf(viewModel.apiKey) }
     var prompt by remember { mutableStateOf(viewModel.defaultPrompt) }
     var model by remember { mutableStateOf(viewModel.qwenModel) }
@@ -201,7 +205,7 @@ fun SettingsScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             if (recordEngine == SettingsRepository.RECORD_ENGINE_WIFI_ADB) {
                 item { WifiAdbCard(viewModel) }
             }
-            item { DebugLogCard() }
+            item { DebugLogCard(autoOpen = openDebugLog) }
         }
     }
 }
@@ -767,7 +771,7 @@ fun WifiAdbCard(viewModel: MainViewModel) {
 }
 
 @Composable
-private fun DebugLogCard() {
+private fun DebugLogCard(autoOpen: Boolean = false) {
     val context = LocalContext.current
     val app = remember(context) { App.from(context) }
     var showLog by remember { mutableStateOf(false) }
@@ -780,6 +784,14 @@ private fun DebugLogCard() {
         logText = app.readLog()
         logSize = app.logFileSizeBytes()
         debugImages = app.debugBitmapFiles()
+    }
+
+    // 从主页「长按设置」进来时直接弹出日志。
+    LaunchedEffect(autoOpen) {
+        if (autoOpen) {
+            refreshLog()
+            showLog = true
+        }
     }
 
     Card(

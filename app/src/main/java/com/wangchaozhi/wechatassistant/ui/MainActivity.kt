@@ -14,6 +14,8 @@ import androidx.activity.addCallback
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -145,7 +147,8 @@ class MainActivity : ComponentActivity() {
                             onOpenEditor = { id -> viewModel.navigate(Screen.Editor(id)) },
                             onOpenTriggers = { id -> viewModel.navigate(Screen.Triggers(id)) },
                             onOpenHistory = { viewModel.navigate(Screen.History) },
-                            onOpenSettings = { viewModel.navigate(Screen.Settings) },
+                            onOpenSettings = { viewModel.navigate(Screen.Settings()) },
+                            onOpenDebugLog = { viewModel.navigate(Screen.Settings(openDebugLog = true)) },
                             onCreateScript = {
                                 viewModel.navigate(Screen.Editor(null))
                             },
@@ -180,8 +183,9 @@ class MainActivity : ComponentActivity() {
                             viewModel = viewModel,
                             onBack = viewModel::back,
                         )
-                        Screen.Settings -> SettingsScreen(
+                        is Screen.Settings -> SettingsScreen(
                             viewModel = viewModel,
+                            openDebugLog = s.openDebugLog,
                             onBack = viewModel::back,
                         )
                     }
@@ -257,7 +261,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun MainScreen(
     viewModel: MainViewModel,
@@ -265,6 +269,7 @@ private fun MainScreen(
     onOpenTriggers: (Long) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenDebugLog: () -> Unit,
     onCreateScript: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onRequestOverlayPermission: () -> Unit,
@@ -321,8 +326,18 @@ private fun MainScreen(
                     IconButton(onClick = onOpenHistory) {
                         Icon(Icons.Filled.History, contentDescription = "AI 历史")
                     }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "设置")
+                    // 单击进设置；长按直达调试日志（开发/排查用，平时不占顶栏位置）。
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .combinedClickable(
+                                onClick = onOpenSettings,
+                                onLongClick = onOpenDebugLog,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Filled.Settings, contentDescription = "设置（长按看调试日志）")
                     }
                 },
             )

@@ -34,7 +34,7 @@ sealed interface Screen {
     data class Editor(val scriptId: Long?) : Screen
     data class Triggers(val scriptId: Long) : Screen
     data object History : Screen
-    data object Settings : Screen
+    data class Settings(val openDebugLog: Boolean = false) : Screen
 }
 
 class MainViewModel(
