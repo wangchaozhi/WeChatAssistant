@@ -18,6 +18,8 @@ class BaselineProfileGenerator {
     @Test
     fun generate() = rule.collect(
         packageName = "com.wangchaozhi.wechatassistant",
+        maxIterations = 1,
+        stableIterations = 1,
     ) {
         pressHome()
         startActivityAndWait()
