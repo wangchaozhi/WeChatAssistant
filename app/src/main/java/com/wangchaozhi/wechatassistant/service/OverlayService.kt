@@ -172,14 +172,14 @@ class OverlayService : LifecycleService() {
         lifecycleScope.launch {
             ServiceBus.selectedScriptChanged.collect { id ->
                 if (id <= 0L) {
-                    clearSelectedScript()
+                    clearSelectedScript(notify = false)
                     return@collect
                 }
                 val data = App.from(this@OverlayService).scriptRepo.load(id)
                 if (data != null) {
-                    setSelectedScript(id, data.script.name)
+                    setSelectedScript(id, data.script.name, notify = false)
                 } else if (selectedScriptId == id) {
-                    clearSelectedScript()
+                    clearSelectedScript(notify = false)
                 }
             }
         }
@@ -1644,18 +1644,20 @@ class OverlayService : LifecycleService() {
     private data class RecordedPasteStep(val timestamp: Long, val text: String?)
 
     /** 记录所选脚本：更新内存状态、持久化 id、刷新面板标签。 */
-    private fun setSelectedScript(id: Long, name: String?) {
+    private fun setSelectedScript(id: Long, name: String?, notify: Boolean = true) {
         selectedScriptId = id
         selectedScriptName = name
         App.from(this).settingsRepo.selectedScriptId = id
+        if (notify) ServiceBus.selectedScriptChanged.tryEmit(id)
         refreshStatus()
     }
 
     /** 清空所选脚本：内存与持久化都清掉，面板回到「连点」。 */
-    private fun clearSelectedScript() {
+    private fun clearSelectedScript(notify: Boolean = true) {
         selectedScriptId = null
         selectedScriptName = null
         App.from(this).settingsRepo.selectedScriptId = -1L
+        if (notify) ServiceBus.selectedScriptChanged.tryEmit(-1L)
         refreshStatus()
     }
 
