@@ -133,6 +133,8 @@ fun GraphEditorScreen(
     // 现场框选模板：IMAGE_MATCH 可追加模板；IF_IMAGE_EXISTS 始终替换为单张模板。
     var pendingLiveTemplateId by remember { mutableStateOf<Long?>(null) }
     var pendingLiveTemplateRequestId by remember { mutableStateOf<Long?>(null) }
+    var pendingAiRegionId by remember { mutableStateOf<Long?>(null) }
+    var pendingAiRegionRequestId by remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(scriptId) {
         if (scriptId == null) {
@@ -193,8 +195,29 @@ fun GraphEditorScreen(
         pendingLiveTemplateRequestId = null
     }
 
+    fun applyAiRegion(result: ServiceBus.AiRegionPickResult) {
+        if (result.requestId != pendingAiRegionRequestId) return
+        val id = pendingAiRegionId ?: return
+        val i = nodes.indexOfFirst { it.id == id }
+        if (i >= 0) {
+            pushUndo()
+            val rect = result.rect
+            nodes[i] = nodes[i].copy(
+                startX = rect.left.toFloat(),
+                startY = rect.top.toFloat(),
+                endX = rect.right.toFloat(),
+                endY = rect.bottom.toFloat(),
+            )
+        }
+        pendingAiRegionId = null
+        pendingAiRegionRequestId = null
+    }
+
     LaunchedEffect(Unit) {
         ServiceBus.templatePickResult.collect { applyLiveTemplate(it) }
+    }
+    LaunchedEffect(Unit) {
+        ServiceBus.aiRegionPickResult.collect { applyAiRegion(it) }
     }
 
     fun undo() {
@@ -451,6 +474,40 @@ fun GraphEditorScreen(
                     // 清空模板，下次「框选」即为重选(替换)，并会重新写入搜索范围 region。
                     pushUndo()
                     nodes[idx] = nodes[idx].copy(templatePath = null)
+                },
+                onClearAiRegion = {
+                    pushUndo()
+                    nodes[idx] = nodes[idx].copy(startX = 0f, startY = 0f, endX = 0f, endY = 0f)
+                },
+                onRecaptureAiRegion = {
+                    if (!ServiceBus.overlayReady.value) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "请先启动悬浮面板，再现场框选 AI 问答区域",
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                        return@EditActionDialog
+                    }
+                    if (!ServiceBus.captureReady.value) {
+                        android.widget.Toast.makeText(
+                            context,
+                            "请先启动截图服务，再现场框选 AI 问答区域",
+                            android.widget.Toast.LENGTH_LONG,
+                        ).show()
+                        return@EditActionDialog
+                    }
+                    val requestId = System.currentTimeMillis()
+                    pendingAiRegionId = ed
+                    pendingAiRegionRequestId = requestId
+                    editingId = null
+                    ServiceBus.overlayCmd.tryEmit(
+                        ServiceBus.OverlayCmd.RequestAiRegionPick(requestId, script?.id?.takeIf { it > 0 })
+                    )
+                    android.widget.Toast.makeText(
+                        context,
+                        "切到目标页面后，点悬浮面板「框选」",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
                 },
                 onRecaptureTemplate = {
                     if (!ServiceBus.overlayReady.value) {

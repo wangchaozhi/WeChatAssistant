@@ -27,7 +27,7 @@ object ServiceBus {
     val pendingPlay = MutableStateFlow<Long?>(null)
 
     sealed interface CaptureCmd {
-        data class TakeAndAsk(val prompt: String) : CaptureCmd
+        data class TakeAndAsk(val prompt: String, val region: Rect? = null) : CaptureCmd
         data object JustCapture : CaptureCmd
         data object StartStream : CaptureCmd
         data object StopStream : CaptureCmd
@@ -52,6 +52,7 @@ object ServiceBus {
         data object StopRecording : OverlayCmd
         data class RecordedAction(val raw: RawTouch) : OverlayCmd
         data class RequestTemplatePick(val requestId: Long, val scriptIdToEdit: Long?) : OverlayCmd
+        data class RequestAiRegionPick(val requestId: Long, val scriptIdToEdit: Long?) : OverlayCmd
         data class FlashRegionMask(val rect: Rect) : OverlayCmd
         data class FlashPositionMarker(val marker: PositionMarker) : OverlayCmd
     }
@@ -71,6 +72,8 @@ object ServiceBus {
 
     data class TemplatePickResult(val requestId: Long, val templatePath: String, val rect: Rect)
     val templatePickResult = MutableSharedFlow<TemplatePickResult>(extraBufferCapacity = 4)
+    data class AiRegionPickResult(val requestId: Long, val rect: Rect)
+    val aiRegionPickResult = MutableSharedFlow<AiRegionPickResult>(extraBufferCapacity = 4)
     val selectedScriptChanged = MutableSharedFlow<Long>(extraBufferCapacity = 4)
 
     val pasteCmd = MutableSharedFlow<Unit>(extraBufferCapacity = 4)

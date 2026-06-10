@@ -99,7 +99,11 @@ class OverlayService : LifecycleService() {
     private var cropOverlay: View? = null
     private var pendingLiveTemplatePickRequestId: Long? = null
     private var pendingLiveTemplatePickScriptId: Long? = null
+    private var pendingAiRegionPickRequestId: Long? = null
+    private var pendingAiRegionPickScriptId: Long? = null
     private var positionMaskView: View? = null
+    private var panelVisibilityBeforeCrop: Int? = null
+    private var recordOverlayVisibilityBeforeCrop: Int? = null
     // 截模板/裁剪期间，屏蔽把全局触摸录进脚本（否则拖裁剪框会被当成操作录下来）。
     @Volatile private var suppressTouchRecording = false
     // 面板收起/展开
@@ -194,6 +198,8 @@ class OverlayService : LifecycleService() {
                     is ServiceBus.OverlayCmd.RecordedAction -> Unit
                     is ServiceBus.OverlayCmd.RequestTemplatePick ->
                         beginLiveTemplatePick(cmd.requestId, cmd.scriptIdToEdit)
+                    is ServiceBus.OverlayCmd.RequestAiRegionPick ->
+                        beginAiRegionPick(cmd.requestId, cmd.scriptIdToEdit)
                     is ServiceBus.OverlayCmd.FlashRegionMask ->
                         showFlashingPositionMarker(ServiceBus.PositionMarker.Region(cmd.rect, "位置"))
                     is ServiceBus.OverlayCmd.FlashPositionMarker ->
@@ -422,20 +428,11 @@ class OverlayService : LifecycleService() {
         cancelRecBtn = btnCancelRec
         val btnAi = compactBtn(ctx, "AI") {
             val prompt = App.from(ctx).settingsRepo.defaultPrompt
-            // 录制中先记一步（即使此刻截图服务没开，回放时再截图问答），与粘贴/回车一致。
-            // end 先等于 start，等 AI 结果回来时再回填(见 lastAiResult 收集器)。
-            if (recording) {
-                val ts = recordTimestamp()
-                recordedAi += RecordedAiStep(ts, prompt, ts)
-                refreshStatus()
-            }
             if (!ServiceBus.captureReady.value) {
                 Toast.makeText(ctx, "请先在主界面启动「截图服务」", Toast.LENGTH_LONG).show()
                 return@compactBtn
             }
-            showBubbleLoading()
-            ServiceBus.lastAiResult.value = null
-            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.TakeAndAsk(prompt))
+            showLiveAiCropOverlayForAsk(prompt)
         }
         val btnPaste = compactBtn(ctx, "粘贴") {
             if (recording) {
@@ -1287,14 +1284,27 @@ class OverlayService : LifecycleService() {
     }
 
     private fun captureLivePickForEditor() {
-        val templateRequestId = pendingLiveTemplatePickRequestId ?: return
+        val templateRequestId = pendingLiveTemplatePickRequestId
+        val aiRegionRequestId = pendingAiRegionPickRequestId
+        if (templateRequestId == null && aiRegionRequestId == null) return
         if (!ServiceBus.captureReady.value) {
             Toast.makeText(this, "请先在主界面启动「截图服务」", Toast.LENGTH_LONG).show()
             return
         }
         if (cropOverlay != null) return
         suppressTouchRecording = true
-        showLiveTemplateCropOverlayForEditor(templateRequestId)
+        if (templateRequestId != null) {
+            showLiveTemplateCropOverlayForEditor(templateRequestId)
+        } else if (aiRegionRequestId != null) {
+            showLiveAiRegionCropOverlayForEditor(aiRegionRequestId)
+        }
+    }
+
+    private fun beginAiRegionPick(requestId: Long, scriptIdToEdit: Long?) {
+        pendingAiRegionPickRequestId = requestId
+        pendingAiRegionPickScriptId = scriptIdToEdit
+        liveRegionPickBtn?.visibility = View.VISIBLE
+        Toast.makeText(this, "切到目标页面后，点悬浮面板「框选」", Toast.LENGTH_LONG).show()
     }
 
     private suspend fun captureScreenBitmap(): android.graphics.Bitmap? {
@@ -1376,9 +1386,31 @@ class OverlayService : LifecycleService() {
         )
         if (!safeAddOverlay(root, params, "框选覆盖层")) {
             suppressTouchRecording = false
+            restoreFloatingWindowsAfterCrop()
             return
         }
         cropOverlay = root
+        hideFloatingWindowsForCrop()
+    }
+
+    private fun hideFloatingWindowsForCrop() {
+        if (panelVisibilityBeforeCrop == null) {
+            panelVisibilityBeforeCrop = panelView?.visibility ?: View.VISIBLE
+        }
+        if (recordOverlayVisibilityBeforeCrop == null) {
+            recordOverlayVisibilityBeforeCrop = recordOverlay?.visibility ?: View.VISIBLE
+        }
+        panelView?.visibility = View.INVISIBLE
+        recordOverlay?.visibility = View.INVISIBLE
+    }
+
+    private fun restoreFloatingWindowsAfterCrop() {
+        if (!ServiceBus.overlayHidden.value) {
+            panelView?.visibility = panelVisibilityBeforeCrop ?: View.VISIBLE
+            recordOverlay?.visibility = recordOverlayVisibilityBeforeCrop ?: View.VISIBLE
+        }
+        panelVisibilityBeforeCrop = null
+        recordOverlayVisibilityBeforeCrop = null
     }
 
     private fun showLiveTemplateCropOverlayForRecording() {
@@ -1386,12 +1418,10 @@ class OverlayService : LifecycleService() {
             hintText = "在真实页面上拖动框选要识别的目标，然后点「确定」",
             tooSmallText = "裁剪区域太小",
         ) { rect ->
-            panelView?.visibility = View.INVISIBLE
             removeCropOverlay()
             lifecycleScope.launch {
                 kotlinx.coroutines.delay(160)
                 val bmp = captureScreenBitmap()
-                panelView?.visibility = View.VISIBLE
                 val cropped = bmp?.let { cropBitmapByScreenRect(it, rect) }
                 if (cropped == null) {
                     Toast.makeText(this@OverlayService, "截图失败或裁剪区域太小", Toast.LENGTH_SHORT).show()
@@ -1411,6 +1441,29 @@ class OverlayService : LifecycleService() {
         }
     }
 
+    private fun showLiveAiCropOverlayForAsk(prompt: String) {
+        if (cropOverlay != null) return
+        suppressTouchRecording = true
+        showLiveCropOverlay(
+            hintText = "在真实页面上拖动框选要问 AI 的区域，然后点「确定」",
+            tooSmallText = "问答区域太小",
+        ) { rect ->
+            // 录制中先记一步（即使后续 AI 调用失败，回放时也会按这个区域截图问答）。
+            if (recording) {
+                val ts = recordTimestamp()
+                recordedAi += RecordedAiStep(ts, prompt, ts, rect)
+                refreshStatus()
+            }
+            removeCropOverlay()
+            lifecycleScope.launch {
+                kotlinx.coroutines.delay(160)
+                showBubbleLoading()
+                ServiceBus.lastAiResult.value = null
+                ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.TakeAndAsk(prompt, rect))
+            }
+        }
+    }
+
     private fun showLiveTemplateCropOverlayForEditor(requestId: Long) {
         showLiveCropOverlay(
             hintText = "在真实页面上拖动框选要识别的图片，然后点「确定」",
@@ -1420,12 +1473,10 @@ class OverlayService : LifecycleService() {
             pendingLiveTemplatePickRequestId = null
             pendingLiveTemplatePickScriptId = null
             liveRegionPickBtn?.visibility = View.GONE
-            panelView?.visibility = View.INVISIBLE
             removeCropOverlay()
             lifecycleScope.launch {
                 kotlinx.coroutines.delay(160)
                 val bmp = captureScreenBitmap()
-                panelView?.visibility = View.VISIBLE
                 val cropped = bmp?.let { cropBitmapByScreenRect(it, rect) }
                 if (cropped == null) {
                     Toast.makeText(this@OverlayService, "截图失败或裁剪区域太小", Toast.LENGTH_SHORT).show()
@@ -1442,6 +1493,22 @@ class OverlayService : LifecycleService() {
                 Toast.makeText(this@OverlayService, "已回填图片模板", Toast.LENGTH_SHORT).show()
                 launchHome(scriptIdToEdit)
             }
+        }
+    }
+
+    private fun showLiveAiRegionCropOverlayForEditor(requestId: Long) {
+        showLiveCropOverlay(
+            hintText = "在真实页面上拖动框选 AI 要识别的区域，然后点「确定」",
+            tooSmallText = "问答区域太小",
+        ) { rect ->
+            val scriptIdToEdit = pendingAiRegionPickScriptId
+            pendingAiRegionPickRequestId = null
+            pendingAiRegionPickScriptId = null
+            liveRegionPickBtn?.visibility = View.GONE
+            removeCropOverlay()
+            ServiceBus.aiRegionPickResult.tryEmit(ServiceBus.AiRegionPickResult(requestId, rect))
+            Toast.makeText(this@OverlayService, "已回填 AI 问答区域", Toast.LENGTH_SHORT).show()
+            launchHome(scriptIdToEdit)
         }
     }
 
@@ -1569,6 +1636,7 @@ class OverlayService : LifecycleService() {
     private fun removeCropOverlay() {
         cropOverlay?.let { runCatching { wm.removeView(it) } }
         cropOverlay = null
+        restoreFloatingWindowsAfterCrop()
         // 稍延迟再恢复，吞掉关闭裁剪层时「确定/取消」那一下的触摸，避免被录进去。
         bubbleHandler.postDelayed({ suppressTouchRecording = false }, 250)
     }
@@ -1692,7 +1760,7 @@ class OverlayService : LifecycleService() {
             touches.map { RecordedEvent.Touch(it) } +
                 pastes.map { RecordedEvent.Paste(it.timestamp, it.text) } +
                 enters.map { RecordedEvent.Enter(it) } +
-                ais.map { RecordedEvent.Ai(it.start, it.end, it.prompt) } +
+                ais.map { RecordedEvent.Ai(it.start, it.end, it.prompt, it.region) } +
                 templates.map { RecordedEvent.ImageMatch(it.first, it.second) }
         val sorted = events.sortedBy { it.timestamp }
         val actions = sorted.mapIndexed { i, ev ->
@@ -1735,8 +1803,10 @@ class OverlayService : LifecycleService() {
                     scriptId = 0,
                     index = i,
                     type = ActionType.SCREENSHOT_AI,
-                    startX = 0f,
-                    startY = 0f,
+                    startX = ev.region.left.toFloat(),
+                    startY = ev.region.top.toFloat(),
+                    endX = ev.region.right.toFloat(),
+                    endY = ev.region.bottom.toFloat(),
                     durationMs = 0L,
                     delayBeforeMs = delay,
                     aiPrompt = ev.prompt,
@@ -1802,13 +1872,14 @@ class OverlayService : LifecycleService() {
             override val timestamp: Long,
             override val endTimestamp: Long,
             val prompt: String,
+            val region: Rect,
         ) : RecordedEvent
         data class ImageMatch(override val timestamp: Long, val templatePath: String) : RecordedEvent {
             override val endTimestamp: Long get() = timestamp
         }
     }
 
-    private data class RecordedAiStep(val start: Long, val prompt: String, var end: Long)
+    private data class RecordedAiStep(val start: Long, val prompt: String, var end: Long, val region: Rect)
     private data class RecordedPasteStep(val timestamp: Long, val text: String?)
 
     /** 记录所选脚本：更新内存状态、持久化 id、刷新面板标签。 */

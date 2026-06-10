@@ -216,6 +216,16 @@ fun ScriptEditorScreen(
                     // 清空模板，下次「选图/框选」即为重选（替换）。region 留给后续框选覆盖。
                     actions[ei] = actions[ei].copy(templatePath = null)
                 },
+                onRecaptureAiRegion = {
+                    android.widget.Toast.makeText(
+                        context,
+                        "请在节点图中使用悬浮面板现场框选 AI 问答区域",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                },
+                onClearAiRegion = {
+                    actions[ei] = actions[ei].copy(startX = 0f, startY = 0f, endX = 0f, endY = 0f)
+                },
                 fetchModels = { viewModel.fetchModels(it) },
                 cachedModels = { viewModel.cachedModels(it) },
             )
@@ -475,7 +485,12 @@ private fun describe(a: Action): String = when (a.type) {
     ActionType.SWIPE ->
         "(${a.startX.toInt()},${a.startY.toInt()})→(${a.endX.toInt()},${a.endY.toInt()}) ${a.durationMs}ms"
     ActionType.WAIT -> "等待 ${a.durationMs}ms" + if (a.randomExtraMs > 0) " (+0~${a.randomExtraMs}ms)" else ""
-    ActionType.SCREENSHOT_AI -> "prompt: \"${a.aiPrompt?.take(40) ?: ""}\""
+    ActionType.SCREENSHOT_AI -> {
+        val region = if (a.endX > a.startX && a.endY > a.startY)
+            " · 区域(${a.startX.toInt()},${a.startY.toInt()})-(${a.endX.toInt()},${a.endY.toInt()})"
+        else " · 整屏"
+        "prompt: \"${a.aiPrompt?.take(40) ?: ""}\"$region"
+    }
     ActionType.IMAGE_MATCH ->
         "${if (templateCount(a.templatePath) > 0) "找图点击(${templateCount(a.templatePath)}张)" else "⚠ 未设模板"} · 精度 ${imagePrecision(a.matchThreshold)} · 延迟 ${a.delayBeforeMs}ms"
     ActionType.PASTE -> "粘贴到当前焦点输入框 · 延迟 ${a.delayBeforeMs}ms"
@@ -563,6 +578,8 @@ internal fun EditActionDialog(
     onConfirm: (Action) -> Unit,
     onRecaptureTemplate: () -> Unit = {},
     onClearTemplate: () -> Unit = {},
+    onRecaptureAiRegion: () -> Unit = {},
+    onClearAiRegion: () -> Unit = {},
     fetchModels: suspend (AiProvider) -> Result<List<String>> = { Result.success(it.models) },
     cachedModels: (AiProvider) -> List<String> = { emptyList() },
     // CALL_SCRIPT 目标脚本可选列表（已排除当前脚本自身）。
@@ -745,6 +762,41 @@ internal fun EditActionDialog(
                         },
                         onModel = { aiModel = it },
                     )
+                    Spacer(Modifier.height(8.dp))
+                    val sx = startX.toFloatOrNull() ?: action.startX
+                    val sy = startY.toFloatOrNull() ?: action.startY
+                    val ex = endX.toFloatOrNull() ?: action.endX
+                    val ey = endY.toFloatOrNull() ?: action.endY
+                    val hasRegion = ex > sx && ey > sy
+                    Text(
+                        if (hasRegion)
+                            "问答区域：(${sx.toInt()},${sy.toInt()})-(${ex.toInt()},${ey.toInt()})"
+                        else "问答区域：整屏",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedButton(onClick = onRecaptureAiRegion, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (hasRegion) "重新框选问答区域" else "框选问答区域")
+                    }
+                    if (hasRegion) {
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("显示区域")
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        TextButton(
+                            onClick = {
+                                startX = "0"
+                                startY = "0"
+                                endX = "0"
+                                endY = "0"
+                                onClearAiRegion()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text("清空区域（整屏问答）")
+                        }
+                    }
                 }
                 if (action.type == ActionType.IMAGE_MATCH) {
                     val count = templateCount(action.templatePath)

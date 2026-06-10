@@ -74,7 +74,7 @@ class CaptureForegroundService : LifecycleService() {
                         app.appendLog("capture() ok ${bmp.width}x${bmp.height}, calling Qwen…")
                         ServiceBus.lastBitmap.value = bmp
                         val result = try {
-                            app.screenshotAi.runWithBitmap(bmp, cmd.prompt)
+                            app.screenshotAi.runWithBitmap(bmp, cmd.prompt, region = cmd.region)
                         } catch (t: Throwable) {
                             app.appendLog("runWithBitmap threw: ${t.javaClass.simpleName}: ${t.message}")
                             Result.failure(t)
