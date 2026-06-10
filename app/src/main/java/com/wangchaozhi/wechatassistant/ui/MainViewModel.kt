@@ -123,6 +123,10 @@ class MainViewModel(
         get() = settings.thumbnailMaxSide
         set(value) { settings.thumbnailMaxSide = value }
 
+    var saveAiHistory: Boolean
+        get() = settings.saveAiHistory
+        set(value) { settings.saveAiHistory = value }
+
     var aiImageMaxSide: Int
         get() = settings.aiImageMaxSide
         set(value) { settings.aiImageMaxSide = value }

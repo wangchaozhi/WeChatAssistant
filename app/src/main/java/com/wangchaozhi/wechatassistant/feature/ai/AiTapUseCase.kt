@@ -37,11 +37,13 @@ class AiTapUseCase(
             .getOrElse { return Result.failure(it) }
 
         val app = App.from(context)
-        app.appScope.launch {
-            runCatching {
-                history.save(bitmap, prompt, raw, scriptId, usedProvider.name, usedModel)
-            }.onFailure {
-                app.appendLog("AI tap history save failed: ${it.javaClass.simpleName}: ${it.message}")
+        if (app.settingsRepo.saveAiHistory) {
+            app.appScope.launch {
+                runCatching {
+                    history.save(bitmap, prompt, raw, scriptId, usedProvider.name, usedModel)
+                }.onFailure {
+                    app.appendLog("AI tap history save failed: ${it.javaClass.simpleName}: ${it.message}")
+                }
             }
         }
 

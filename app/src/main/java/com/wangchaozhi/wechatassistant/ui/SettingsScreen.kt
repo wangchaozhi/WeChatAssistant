@@ -116,6 +116,7 @@ fun SettingsScreen(
     var prompt by remember { mutableStateOf(viewModel.defaultPrompt) }
     var model by remember { mutableStateOf(viewModel.qwenModel) }
     var thumbSide by remember { mutableStateOf(viewModel.thumbnailMaxSide) }
+    var saveAiHistory by remember { mutableStateOf(viewModel.saveAiHistory) }
     var aiSide by remember { mutableStateOf(viewModel.aiImageMaxSide) }
     var msKey by remember { mutableStateOf(viewModel.modelScopeApiKey) }
     var msModel by remember { mutableStateOf(viewModel.modelScopeModel) }
@@ -225,6 +226,12 @@ fun SettingsScreen(
                 )
             }
             item {
+                AiHistoryCard(
+                    enabled = saveAiHistory,
+                    onEnabled = { saveAiHistory = it; viewModel.saveAiHistory = it },
+                )
+            }
+            if (saveAiHistory) item {
                 ThumbnailCard(
                     side = thumbSide,
                     onSide = { thumbSide = it; viewModel.thumbnailMaxSide = it },
@@ -665,6 +672,37 @@ private fun AiImageCard(side: Int, onSide: (Int) -> Unit) {
                 onSide = onSide,
                 label = "上传分辨率",
             )
+        }
+    }
+}
+
+@Composable
+private fun AiHistoryCard(enabled: Boolean, onEnabled: (Boolean) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Row(
+            Modifier.padding(16.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SettingsIcon(Icons.Filled.Image)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text("保存 AI 历史", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (enabled) {
+                        "保存回答记录和缩略图，便于回看"
+                    } else {
+                        "关闭后不保存回答记录和截图缩略图"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Switch(checked = enabled, onCheckedChange = onEnabled)
         }
     }
 }

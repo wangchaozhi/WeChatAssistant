@@ -53,6 +53,10 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt(KEY_THUMB_SIDE, DEFAULT_THUMB_SIDE)
         set(value) = prefs.edit { putInt(KEY_THUMB_SIDE, value.coerceIn(MIN_IMAGE_SIDE, MAX_IMAGE_SIDE)) }
 
+    var saveAiHistory: Boolean
+        get() = prefs.getBoolean(KEY_SAVE_AI_HISTORY, DEFAULT_SAVE_AI_HISTORY)
+        set(value) = prefs.edit { putBoolean(KEY_SAVE_AI_HISTORY, value) }
+
     var aiImageMaxSide: Int
         get() = prefs.getInt(KEY_AI_SIDE, DEFAULT_AI_SIDE)
         set(value) = prefs.edit { putInt(KEY_AI_SIDE, value.coerceIn(MIN_IMAGE_SIDE, MAX_IMAGE_SIDE)) }
@@ -176,6 +180,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_DEFAULT_PROVIDER = "default_ai_provider"
         private const val KEY_REASONING_EFFORT = "ai_reasoning_effort"
         private const val KEY_THUMB_SIDE = "thumb_max_side"
+        private const val KEY_SAVE_AI_HISTORY = "save_ai_history"
         private const val KEY_AI_SIDE = "ai_image_max_side"
         private const val KEY_MODEL_CACHE_PREFIX = "model_cache_"
         private const val KEY_ADB_HOST = "adb_host"
@@ -201,6 +206,7 @@ class SettingsRepository(context: Context) {
         const val DEFAULT_REASONING_EFFORT = "OFF"
         const val DEFAULT_PROMPT = "请识别截图中的内容并简要回答。"
         const val DEFAULT_THUMB_SIDE = 480
+        const val DEFAULT_SAVE_AI_HISTORY = true
         const val DEFAULT_AI_SIDE = 1024
         const val DEFAULT_ADB_HOST = "127.0.0.1"
     }

@@ -56,15 +56,17 @@ class ScreenshotAiUseCase(
         result.onSuccess { answer ->
             context.copyToClipboard(answer)
             ServiceBus.lastAiAnswer.value = answer
-            savingInBackground = true
-            app.appScope.launch {
-                runCatching {
-                    history.save(askBitmap, effective, answer, scriptId, usedProvider.name, usedModel)
-                }.onFailure {
-                    app.appendLog("AI history save failed: ${it.javaClass.simpleName}: ${it.message}")
-                }
-                if (askBitmap !== bitmap) {
-                    askBitmap.recycle()
+            if (settings.saveAiHistory) {
+                savingInBackground = true
+                app.appScope.launch {
+                    runCatching {
+                        history.save(askBitmap, effective, answer, scriptId, usedProvider.name, usedModel)
+                    }.onFailure {
+                        app.appendLog("AI history save failed: ${it.javaClass.simpleName}: ${it.message}")
+                    }
+                    if (askBitmap !== bitmap) {
+                        askBitmap.recycle()
+                    }
                 }
             }
         }
