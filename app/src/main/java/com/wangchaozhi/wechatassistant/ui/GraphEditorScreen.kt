@@ -496,6 +496,7 @@ fun GraphEditorScreen(
         if (idx >= 0) {
             EditActionDialog(
                 action = nodes[idx],
+                scriptIdToEdit = script?.id,
                 onDismiss = { editingId = null },
                 onConfirm = { updated -> nodes[idx] = updated; editingId = null },
                 fetchModels = { viewModel.fetchModels(it) },

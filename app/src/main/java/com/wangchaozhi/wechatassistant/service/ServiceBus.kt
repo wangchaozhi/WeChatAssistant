@@ -53,6 +53,7 @@ object ServiceBus {
         data class RecordedAction(val raw: RawTouch) : OverlayCmd
         data class RequestTemplatePick(val requestId: Long, val scriptIdToEdit: Long?) : OverlayCmd
         data class RequestAiRegionPick(val requestId: Long, val scriptIdToEdit: Long?) : OverlayCmd
+        data class RequestGesturePick(val requestId: Long, val scriptIdToEdit: Long?) : OverlayCmd
         data class FlashRegionMask(val rect: Rect) : OverlayCmd
         data class FlashPositionMarker(val marker: PositionMarker) : OverlayCmd
     }
@@ -74,6 +75,8 @@ object ServiceBus {
     val templatePickResult = MutableSharedFlow<TemplatePickResult>(extraBufferCapacity = 4)
     data class AiRegionPickResult(val requestId: Long, val rect: Rect)
     val aiRegionPickResult = MutableSharedFlow<AiRegionPickResult>(extraBufferCapacity = 4)
+    data class GesturePickResult(val requestId: Long, val raw: RawTouch)
+    val gesturePickResult = MutableSharedFlow<GesturePickResult>(extraBufferCapacity = 4)
     val selectedScriptChanged = MutableSharedFlow<Long>(extraBufferCapacity = 4)
 
     val pasteCmd = MutableSharedFlow<Unit>(extraBufferCapacity = 4)

@@ -200,6 +200,7 @@ fun ScriptEditorScreen(
         if (ei != null && ei in actions.indices) {
             EditActionDialog(
                 action = actions[ei],
+                scriptIdToEdit = scriptId,
                 onDismiss = { editingIndex = null },
                 onConfirm = { updated ->
                     actions[ei] = updated
@@ -574,6 +575,7 @@ private fun AddAiStepDialog(
 @Composable
 internal fun EditActionDialog(
     action: Action,
+    scriptIdToEdit: Long? = null,
     onDismiss: () -> Unit,
     onConfirm: (Action) -> Unit,
     onRecaptureTemplate: () -> Unit = {},
@@ -617,6 +619,7 @@ internal fun EditActionDialog(
     var aiModel by remember { mutableStateOf(action.aiModel.orEmpty()) }
     var showPositionPreview by remember { mutableStateOf(false) }
     var showIfTemplateActions by remember { mutableStateOf(false) }
+    var pendingGesturePickRequestId by remember { mutableStateOf<Long?>(null) }
     val context = LocalContext.current
 
     fun showActionPosition() {
@@ -656,6 +659,43 @@ internal fun EditActionDialog(
         }
     }
 
+    fun requestGesturePick() {
+        if (!ServiceBus.overlayReady.value) {
+            android.widget.Toast.makeText(
+                context,
+                "请先启动悬浮面板，再从屏幕填入位置",
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+        val requestId = System.currentTimeMillis()
+        pendingGesturePickRequestId = requestId
+        ServiceBus.overlayCmd.tryEmit(
+            ServiceBus.OverlayCmd.RequestGesturePick(requestId, scriptIdToEdit?.takeIf { it > 0 })
+        )
+    }
+
+    LaunchedEffect(action.id) {
+        ServiceBus.gesturePickResult.collect { result ->
+            if (result.requestId != pendingGesturePickRequestId) return@collect
+            val raw = result.raw
+            startX = raw.startX.toInt().toString()
+            startY = raw.startY.toInt().toString()
+            when (action.type) {
+                ActionType.SWIPE -> {
+                    endX = raw.endX.toInt().toString()
+                    endY = raw.endY.toInt().toString()
+                    duration = raw.durationMs.toString()
+                }
+                ActionType.LONG_PRESS -> {
+                    duration = raw.durationMs.toString()
+                }
+                else -> Unit
+            }
+            pendingGesturePickRequestId = null
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("编辑 ${typeLabel(action.type)}") },
@@ -678,8 +718,13 @@ internal fun EditActionDialog(
                             NumField(startY, { startY = it }, "Y", Modifier.weight(1f))
                         }
                         Spacer(Modifier.height(6.dp))
-                        OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.fillMaxWidth()) {
-                            Text("显示位置")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.weight(1f)) {
+                                Text("显示位置")
+                            }
+                            OutlinedButton(onClick = { requestGesturePick() }, modifier = Modifier.weight(1f)) {
+                                Text("从屏幕填入")
+                            }
                         }
                     }
                     ActionType.SWIPE -> {
@@ -693,8 +738,13 @@ internal fun EditActionDialog(
                             NumField(endY, { endY = it }, "终 Y", Modifier.weight(1f))
                         }
                         Spacer(Modifier.height(6.dp))
-                        OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.fillMaxWidth()) {
-                            Text("显示位置")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.weight(1f)) {
+                                Text("显示位置")
+                            }
+                            OutlinedButton(onClick = { requestGesturePick() }, modifier = Modifier.weight(1f)) {
+                                Text("从屏幕填入")
+                            }
                         }
                     }
                     ActionType.WAIT, ActionType.SCREENSHOT_AI,

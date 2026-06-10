@@ -101,6 +101,9 @@ class OverlayService : LifecycleService() {
     private var pendingLiveTemplatePickScriptId: Long? = null
     private var pendingAiRegionPickRequestId: Long? = null
     private var pendingAiRegionPickScriptId: Long? = null
+    private var pendingGesturePickRequestId: Long? = null
+    private var pendingGesturePickScriptId: Long? = null
+    private var gesturePickOverlay: RecordOverlayView? = null
     private var positionMaskView: View? = null
     private var panelVisibilityBeforeCrop: Int? = null
     private var recordOverlayVisibilityBeforeCrop: Int? = null
@@ -200,6 +203,8 @@ class OverlayService : LifecycleService() {
                         beginLiveTemplatePick(cmd.requestId, cmd.scriptIdToEdit)
                     is ServiceBus.OverlayCmd.RequestAiRegionPick ->
                         beginAiRegionPick(cmd.requestId, cmd.scriptIdToEdit)
+                    is ServiceBus.OverlayCmd.RequestGesturePick ->
+                        beginGesturePick(cmd.requestId, cmd.scriptIdToEdit)
                     is ServiceBus.OverlayCmd.FlashRegionMask ->
                         showFlashingPositionMarker(ServiceBus.PositionMarker.Region(cmd.rect, "位置"))
                     is ServiceBus.OverlayCmd.FlashPositionMarker ->
@@ -1289,6 +1294,7 @@ class OverlayService : LifecycleService() {
     private fun beginLiveTemplatePick(requestId: Long, scriptIdToEdit: Long?) {
         pendingLiveTemplatePickRequestId = requestId
         pendingLiveTemplatePickScriptId = scriptIdToEdit
+        liveRegionPickBtn?.text = "框选"
         liveRegionPickBtn?.visibility = View.VISIBLE
         Toast.makeText(this, "切到目标页面后，点悬浮面板「框选」", Toast.LENGTH_LONG).show()
     }
@@ -1296,7 +1302,12 @@ class OverlayService : LifecycleService() {
     private fun captureLivePickForEditor() {
         val templateRequestId = pendingLiveTemplatePickRequestId
         val aiRegionRequestId = pendingAiRegionPickRequestId
-        if (templateRequestId == null && aiRegionRequestId == null) return
+        val gestureRequestId = pendingGesturePickRequestId
+        if (templateRequestId == null && aiRegionRequestId == null && gestureRequestId == null) return
+        if (gestureRequestId != null) {
+            showGesturePickOverlayForEditor(gestureRequestId)
+            return
+        }
         if (!ServiceBus.captureReady.value) {
             Toast.makeText(this, "请先在主界面启动「截图服务」", Toast.LENGTH_LONG).show()
             return
@@ -1313,8 +1324,64 @@ class OverlayService : LifecycleService() {
     private fun beginAiRegionPick(requestId: Long, scriptIdToEdit: Long?) {
         pendingAiRegionPickRequestId = requestId
         pendingAiRegionPickScriptId = scriptIdToEdit
+        liveRegionPickBtn?.text = "框选"
         liveRegionPickBtn?.visibility = View.VISIBLE
         Toast.makeText(this, "切到目标页面后，点悬浮面板「框选」", Toast.LENGTH_LONG).show()
+    }
+
+    private fun beginGesturePick(requestId: Long, scriptIdToEdit: Long?) {
+        if (recording) {
+            Toast.makeText(this, "录制中不能从屏幕填入位置", Toast.LENGTH_SHORT).show()
+            return
+        }
+        pendingGesturePickRequestId = requestId
+        pendingGesturePickScriptId = scriptIdToEdit
+        liveRegionPickBtn?.text = "取位置"
+        liveRegionPickBtn?.visibility = View.VISIBLE
+        Toast.makeText(this, "切到目标页面后，点悬浮面板「取位置」", Toast.LENGTH_LONG).show()
+    }
+
+    private fun showGesturePickOverlayForEditor(requestId: Long) {
+        if (gesturePickOverlay != null || cropOverlay != null || recording) return
+        suppressTouchRecording = true
+        panelVisibilityBeforeCrop = panelView?.visibility ?: View.VISIBLE
+        recordOverlayVisibilityBeforeCrop = recordOverlay?.visibility ?: View.VISIBLE
+        panelView?.visibility = View.INVISIBLE
+        recordOverlay?.visibility = View.INVISIBLE
+        val overlay = RecordOverlayView(this) { raw ->
+            val scriptIdToEdit = pendingGesturePickScriptId
+            pendingGesturePickRequestId = null
+            pendingGesturePickScriptId = null
+            liveRegionPickBtn?.visibility = View.GONE
+            removeGesturePickOverlay()
+            ServiceBus.gesturePickResult.tryEmit(ServiceBus.GesturePickResult(requestId, raw))
+            Toast.makeText(this, "已回填位置", Toast.LENGTH_SHORT).show()
+            launchHome(scriptIdToEdit)
+        }
+        val params = WindowManager.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            overlayType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+        if (!safeAddOverlay(overlay, params, "取位置覆盖层")) {
+            suppressTouchRecording = false
+            restoreFloatingWindowsAfterCrop()
+            return
+        }
+        gesturePickOverlay = overlay
+        Toast.makeText(this, "在目标位置点击、长按或滑动一次", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun removeGesturePickOverlay() {
+        gesturePickOverlay?.let { runCatching { wm.removeView(it) } }
+        gesturePickOverlay = null
+        suppressTouchRecording = false
+        restoreFloatingWindowsAfterCrop()
     }
 
     private suspend fun captureScreenBitmap(): android.graphics.Bitmap? {
@@ -2215,6 +2282,7 @@ class OverlayService : LifecycleService() {
         removeRecordOverlay()
         ServiceBus.overlayReady.value = false
         ServiceBus.recordingMode.value = false
+        removeGesturePickOverlay()
         removeCropOverlay()
         removePositionMask()
         panelView?.let { runCatching { wm.removeView(it) } }
