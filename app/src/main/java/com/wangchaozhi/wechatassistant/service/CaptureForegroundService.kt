@@ -8,6 +8,7 @@ import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
@@ -32,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import android.media.Image
+import java.nio.ByteBuffer
 
 class CaptureForegroundService : LifecycleService() {
 
@@ -56,7 +58,7 @@ class CaptureForegroundService : LifecycleService() {
             ServiceBus.captureCmd.collectLatest { cmd ->
                 when (cmd) {
                     is ServiceBus.CaptureCmd.JustCapture -> {
-                        val bmp = captureExcludingOverlay()
+                        val bmp = captureExcludingOverlay(cmd.region)
                         ServiceBus.lastBitmap.value = bmp
                     }
                     ServiceBus.CaptureCmd.StartStream -> startFrameStream()
@@ -64,7 +66,7 @@ class CaptureForegroundService : LifecycleService() {
                     is ServiceBus.CaptureCmd.TakeAndAsk -> {
                         val app = App.from(this@CaptureForegroundService)
                         app.appendLog("TakeAndAsk start, prompt='${cmd.prompt}'")
-                        val bmp = captureExcludingOverlay()
+                        val bmp = captureExcludingOverlay(cmd.region)
                         if (bmp == null) {
                             app.appendLog("capture() returned null")
                             ServiceBus.lastAiResult.value =
@@ -74,7 +76,7 @@ class CaptureForegroundService : LifecycleService() {
                         app.appendLog("capture() ok ${bmp.width}x${bmp.height}, calling Qwen…")
                         ServiceBus.lastBitmap.value = bmp
                         val result = try {
-                            app.screenshotAi.runWithBitmap(bmp, cmd.prompt, region = cmd.region)
+                            app.screenshotAi.runWithBitmap(bmp, cmd.prompt)
                         } catch (t: Throwable) {
                             app.appendLog("runWithBitmap threw: ${t.javaClass.simpleName}: ${t.message}")
                             Result.failure(t)
@@ -163,7 +165,10 @@ class CaptureForegroundService : LifecycleService() {
         densityDpi = resources.displayMetrics.densityDpi
     }
 
-    private fun imageToBitmap(img: Image): Bitmap {
+    private fun imageToBitmap(img: Image, region: Rect? = null): Bitmap {
+        val crop = region?.let { clampRegion(it) }
+        if (crop != null) return imageRegionToBitmap(img, crop)
+
         val plane = img.planes[0]
         val pixelStride = plane.pixelStride
         val rowStride = plane.rowStride
@@ -178,14 +183,58 @@ class CaptureForegroundService : LifecycleService() {
         else Bitmap.createBitmap(bmp, 0, 0, widthPx, heightPx)
     }
 
-    private suspend fun captureExcludingOverlay(): Bitmap? {
+    private fun imageRegionToBitmap(img: Image, crop: Rect): Bitmap {
+        val plane = img.planes[0]
+        val pixelStride = plane.pixelStride
+        val rowStride = plane.rowStride
+        val buffer = plane.buffer
+        val w = crop.width()
+        val h = crop.height()
+        val bytesPerPixel = 4
+        val pixels = ByteArray(w * h * bytesPerPixel)
+
+        if (pixelStride == bytesPerPixel) {
+            repeat(h) { y ->
+                buffer.position((crop.top + y) * rowStride + crop.left * pixelStride)
+                buffer.get(pixels, y * w * bytesPerPixel, w * bytesPerPixel)
+            }
+        } else {
+            val px = ByteArray(pixelStride)
+            repeat(h) { y ->
+                repeat(w) { x ->
+                    buffer.position((crop.top + y) * rowStride + (crop.left + x) * pixelStride)
+                    buffer.get(px, 0, pixelStride)
+                    val dst = (y * w + x) * bytesPerPixel
+                    pixels[dst] = px[0]
+                    pixels[dst + 1] = px.getOrElse(1) { 0 }
+                    pixels[dst + 2] = px.getOrElse(2) { 0 }
+                    pixels[dst + 3] = px.getOrElse(3) { -1 }
+                }
+            }
+        }
+
+        return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+            copyPixelsFromBuffer(ByteBuffer.wrap(pixels))
+        }
+    }
+
+    private fun clampRegion(region: Rect): Rect? {
+        val l = region.left.coerceIn(0, widthPx - 1)
+        val t = region.top.coerceIn(0, heightPx - 1)
+        val r = region.right.coerceIn(l + 1, widthPx)
+        val b = region.bottom.coerceIn(t + 1, heightPx)
+        if (r - l < 8 || b - t < 8) return null
+        return Rect(l, t, r, b)
+    }
+
+    private suspend fun captureExcludingOverlay(region: Rect? = null): Bitmap? {
         val wasOverlayActive = ServiceBus.overlayReady.value
-        if (!wasOverlayActive) return capture()
+        if (!wasOverlayActive) return capture(region)
         ServiceBus.overlayHidden.value = true
         return try {
             delay(180)
             drainBuffer()
-            capture()
+            capture(region)
         } finally {
             ServiceBus.overlayHidden.value = false
         }
@@ -238,18 +287,18 @@ class CaptureForegroundService : LifecycleService() {
         streamHidOverlay = false
     }
 
-    private suspend fun capture(): Bitmap? = withContext(Dispatchers.Default) {
+    private suspend fun capture(region: Rect? = null): Bitmap? = withContext(Dispatchers.Default) {
         stopFrameStream()
         val reader = imageReader ?: return@withContext null
         runCatching {
             reader.acquireLatestImage()?.use { img ->
-                return@withContext imageToBitmap(img)
+                return@withContext imageToBitmap(img, region)
             }
         }
         val deferred = CompletableDeferred<Bitmap?>()
         reader.setOnImageAvailableListener({ r ->
             val bmp = runCatching {
-                r.acquireLatestImage()?.use { imageToBitmap(it) }
+                r.acquireLatestImage()?.use { imageToBitmap(it, region) }
             }.getOrNull()
             r.setOnImageAvailableListener(null, null)
             deferred.complete(bmp)

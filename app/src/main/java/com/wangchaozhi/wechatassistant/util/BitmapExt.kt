@@ -34,5 +34,7 @@ fun Bitmap.toBase64Jpeg(quality: Int = 80, maxSide: Int = 1280): String {
     val scaled = scaleToMaxSide(maxSide)
     val out = ByteArrayOutputStream()
     scaled.compress(Bitmap.CompressFormat.JPEG, quality, out)
-    return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+    val base64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+    if (scaled !== this) scaled.recycle()
+    return base64
 }

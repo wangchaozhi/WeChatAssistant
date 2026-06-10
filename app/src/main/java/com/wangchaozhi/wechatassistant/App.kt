@@ -18,6 +18,9 @@ import com.wangchaozhi.wechatassistant.feature.ai.VisionAiRepository
 import com.wangchaozhi.wechatassistant.feature.match.TemplateMatchUseCase
 import com.wangchaozhi.wechatassistant.util.WifiAdbManager
 import com.wangchaozhi.wechatassistant.feature.qwen.QwenRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import java.io.File
@@ -28,6 +31,8 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class App : Application() {
+
+    val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val database: AppDatabase by lazy {
         Room.databaseBuilder(this, AppDatabase::class.java, "wca.db")
@@ -107,7 +112,11 @@ class App : Application() {
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor { msg -> appendLog(msg) }.apply {
-                level = HttpLoggingInterceptor.Level.BODY
+                level = if (BuildConfig.DEBUG) {
+                    HttpLoggingInterceptor.Level.BODY
+                } else {
+                    HttpLoggingInterceptor.Level.NONE
+                }
                 redactHeader("Authorization")
             })
             .build()

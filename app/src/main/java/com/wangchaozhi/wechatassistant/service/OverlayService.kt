@@ -1386,7 +1386,7 @@ class OverlayService : LifecycleService() {
 
     private suspend fun captureScreenBitmap(): android.graphics.Bitmap? {
         ServiceBus.lastBitmap.value = null
-        ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture)
+        ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture())
         return kotlinx.coroutines.withTimeoutOrNull(5_000) {
             ServiceBus.lastBitmap.first { it != null }
         }

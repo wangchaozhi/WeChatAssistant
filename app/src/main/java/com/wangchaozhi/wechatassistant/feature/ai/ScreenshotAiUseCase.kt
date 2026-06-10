@@ -8,6 +8,7 @@ import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.service.ServiceBus
 import com.wangchaozhi.wechatassistant.util.copyToClipboard
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 
@@ -29,10 +30,10 @@ class ScreenshotAiUseCase(
         }
         val bitmap = withTimeoutOrNull(5_000) {
             ServiceBus.lastBitmap.value = null
-            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture)
+            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture(region))
             ServiceBus.lastBitmap.first { it != null }!!
         } ?: return Result.failure(IllegalStateException("截图超时。"))
-        return runWithBitmap(bitmap, prompt, scriptId, provider, model, region)
+        return runWithBitmap(bitmap, prompt, scriptId, provider, model)
     }
 
     suspend fun runWithBitmap(
@@ -43,21 +44,31 @@ class ScreenshotAiUseCase(
         model: String? = null,
         region: Rect? = null,
     ): Result<String> {
-        val settings = App.from(context).settingsRepo
+        val app = App.from(context)
+        val settings = app.settingsRepo
         val maxSide = settings.aiImageMaxSide
         val quality = qualityFor(maxSide)
         val effective = prompt.ifBlank { settings.defaultPrompt }
         val (usedProvider, usedModel) = vision.resolve(provider, model)
         val askBitmap = region?.let { cropBitmapByScreenRect(bitmap, it) } ?: bitmap
         val result = vision.ask(askBitmap, effective, provider, model, maxSide = maxSide, quality = quality)
+        var savingInBackground = false
         result.onSuccess { answer ->
             context.copyToClipboard(answer)
             ServiceBus.lastAiAnswer.value = answer
-            runCatching {
-                history.save(askBitmap, effective, answer, scriptId, usedProvider.name, usedModel)
+            savingInBackground = true
+            app.appScope.launch {
+                runCatching {
+                    history.save(askBitmap, effective, answer, scriptId, usedProvider.name, usedModel)
+                }.onFailure {
+                    app.appendLog("AI history save failed: ${it.javaClass.simpleName}: ${it.message}")
+                }
+                if (askBitmap !== bitmap) {
+                    askBitmap.recycle()
+                }
             }
         }
-        if (askBitmap !== bitmap) askBitmap.recycle()
+        if (askBitmap !== bitmap && !savingInBackground) askBitmap.recycle()
         return result
     }
 
@@ -76,7 +87,7 @@ class ScreenshotAiUseCase(
     }
 
     private fun qualityFor(maxSide: Int): Int = when {
-        maxSide <= 1024 -> 75
+        maxSide <= 1024 -> 70
         maxSide <= 1280 -> 80
         else -> 85
     }

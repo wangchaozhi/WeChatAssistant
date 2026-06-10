@@ -28,7 +28,7 @@ object ServiceBus {
 
     sealed interface CaptureCmd {
         data class TakeAndAsk(val prompt: String, val region: Rect? = null) : CaptureCmd
-        data object JustCapture : CaptureCmd
+        data class JustCapture(val region: Rect? = null) : CaptureCmd
         data object StartStream : CaptureCmd
         data object StopStream : CaptureCmd
     }

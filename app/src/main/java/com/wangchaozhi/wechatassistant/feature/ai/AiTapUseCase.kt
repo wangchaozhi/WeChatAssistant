@@ -7,6 +7,7 @@ import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.service.ServiceBus
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 class AiTapUseCase(
@@ -26,7 +27,7 @@ class AiTapUseCase(
         }
         val bitmap = withTimeoutOrNull(5_000) {
             ServiceBus.lastBitmap.value = null
-            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture)
+            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture())
             ServiceBus.lastBitmap.first { it != null }!!
         } ?: return Result.failure(IllegalStateException("截图超时。"))
 
@@ -35,10 +36,17 @@ class AiTapUseCase(
         val raw = vision.ask(bitmap, prompt, provider, model, maxSide = Int.MAX_VALUE)
             .getOrElse { return Result.failure(it) }
 
-        runCatching { history.save(bitmap, prompt, raw, scriptId, usedProvider.name, usedModel) }
+        val app = App.from(context)
+        app.appScope.launch {
+            runCatching {
+                history.save(bitmap, prompt, raw, scriptId, usedProvider.name, usedModel)
+            }.onFailure {
+                app.appendLog("AI tap history save failed: ${it.javaClass.simpleName}: ${it.message}")
+            }
+        }
 
         val point = parseCoords(raw, bitmap.width, bitmap.height)
-        App.from(context).appendLog(
+        app.appendLog(
             "AITAP w=${bitmap.width} h=${bitmap.height} point=$point raw=${raw.replace("\n", " ").take(180)}"
         )
         if (point == null) {

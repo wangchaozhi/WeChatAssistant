@@ -198,10 +198,10 @@ class SettingsRepository(context: Context) {
         const val DEFAULT_MODEL = "qwen3.5-omni-flash"
         const val DEFAULT_MS_MODEL = "Qwen/Qwen3.5-122B-A10B"
         const val DEFAULT_PROVIDER = "DASHSCOPE"
-        const val DEFAULT_REASONING_EFFORT = "DEFAULT"
+        const val DEFAULT_REASONING_EFFORT = "OFF"
         const val DEFAULT_PROMPT = "请识别截图中的内容并简要回答。"
         const val DEFAULT_THUMB_SIDE = 480
-        const val DEFAULT_AI_SIDE = 1280
+        const val DEFAULT_AI_SIDE = 1024
         const val DEFAULT_ADB_HOST = "127.0.0.1"
     }
 }

@@ -78,7 +78,7 @@ class TemplateMatchUseCase(
 
         val screen = withTimeoutOrNull(5_000) {
             ServiceBus.lastBitmap.value = null
-            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture)
+            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture())
             ServiceBus.lastBitmap.first { it != null }!!
         } ?: return Result.failure(IllegalStateException("截图超时。"))
 
@@ -109,7 +109,7 @@ class TemplateMatchUseCase(
 
         val screen = withTimeoutOrNull(5_000) {
             ServiceBus.lastBitmap.value = null
-            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture)
+            ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture())
             ServiceBus.lastBitmap.first { it != null }!!
         } ?: return Result.failure(IllegalStateException("截图超时。"))
 
