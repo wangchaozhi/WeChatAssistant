@@ -768,33 +768,57 @@ internal fun EditActionDialog(
                     val ex = endX.toFloatOrNull() ?: action.endX
                     val ey = endY.toFloatOrNull() ?: action.endY
                     val hasRegion = ex > sx && ey > sy
-                    Text(
-                        if (hasRegion)
-                            "问答区域：(${sx.toInt()},${sy.toInt()})-(${ex.toInt()},${ey.toInt()})"
-                        else "问答区域：整屏",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    OutlinedButton(onClick = onRecaptureAiRegion, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (hasRegion) "重新框选问答区域" else "框选问答区域")
-                    }
-                    if (hasRegion) {
-                        Spacer(Modifier.height(4.dp))
-                        OutlinedButton(onClick = { showActionPosition() }, modifier = Modifier.fillMaxWidth()) {
-                            Text("显示区域")
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        TextButton(
-                            onClick = {
-                                startX = "0"
-                                startY = "0"
-                                endX = "0"
-                                endY = "0"
-                                onClearAiRegion()
-                            },
-                            modifier = Modifier.fillMaxWidth(),
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                         ) {
-                            Text("清空区域（整屏问答）")
+                            Text(
+                                if (hasRegion)
+                                    "问答区域：(${sx.toInt()},${sy.toInt()})-(${ex.toInt()},${ey.toInt()})"
+                                else "问答区域：整屏",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (hasRegion) {
+                                Text(
+                                    "显示",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.clickable { showActionPosition() },
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    "重选",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.clickable { onRecaptureAiRegion() },
+                                )
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    "清除",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.clickable {
+                                        startX = "0"
+                                        startY = "0"
+                                        endX = "0"
+                                        endY = "0"
+                                        onClearAiRegion()
+                                    },
+                                )
+                            } else {
+                                Text(
+                                    "框选",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.clickable { onRecaptureAiRegion() },
+                                )
+                            }
                         }
                     }
                 }

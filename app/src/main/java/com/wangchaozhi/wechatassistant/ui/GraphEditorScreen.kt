@@ -241,6 +241,37 @@ fun GraphEditorScreen(
         )
     }
 
+    fun requestAiRegionPick(nodeId: Long, closeEditor: Boolean = false) {
+        if (!ServiceBus.overlayReady.value) {
+            android.widget.Toast.makeText(
+                context,
+                "请先启动悬浮面板，再现场框选 AI 问答区域",
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+        if (!ServiceBus.captureReady.value) {
+            android.widget.Toast.makeText(
+                context,
+                "请先启动截图服务，再现场框选 AI 问答区域",
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+        val requestId = System.currentTimeMillis()
+        pendingAiRegionId = nodeId
+        pendingAiRegionRequestId = requestId
+        if (closeEditor) editingId = null
+        ServiceBus.overlayCmd.tryEmit(
+            ServiceBus.OverlayCmd.RequestAiRegionPick(requestId, script?.id?.takeIf { it > 0 })
+        )
+        android.widget.Toast.makeText(
+            context,
+            "切到目标页面后，点悬浮面板「框选」",
+            android.widget.Toast.LENGTH_LONG,
+        ).show()
+    }
+
     fun connect(fromId: Long, fromPort: Int, toId: Long) {
         if (fromId == toId) return
         // 一个出口可连多条线（运行时按顺序依次执行）；仅去重完全相同的边。
@@ -480,34 +511,7 @@ fun GraphEditorScreen(
                     nodes[idx] = nodes[idx].copy(startX = 0f, startY = 0f, endX = 0f, endY = 0f)
                 },
                 onRecaptureAiRegion = {
-                    if (!ServiceBus.overlayReady.value) {
-                        android.widget.Toast.makeText(
-                            context,
-                            "请先启动悬浮面板，再现场框选 AI 问答区域",
-                            android.widget.Toast.LENGTH_LONG,
-                        ).show()
-                        return@EditActionDialog
-                    }
-                    if (!ServiceBus.captureReady.value) {
-                        android.widget.Toast.makeText(
-                            context,
-                            "请先启动截图服务，再现场框选 AI 问答区域",
-                            android.widget.Toast.LENGTH_LONG,
-                        ).show()
-                        return@EditActionDialog
-                    }
-                    val requestId = System.currentTimeMillis()
-                    pendingAiRegionId = ed
-                    pendingAiRegionRequestId = requestId
-                    editingId = null
-                    ServiceBus.overlayCmd.tryEmit(
-                        ServiceBus.OverlayCmd.RequestAiRegionPick(requestId, script?.id?.takeIf { it > 0 })
-                    )
-                    android.widget.Toast.makeText(
-                        context,
-                        "切到目标页面后，点悬浮面板「框选」",
-                        android.widget.Toast.LENGTH_LONG,
-                    ).show()
+                    requestAiRegionPick(ed, closeEditor = true)
                 },
                 onRecaptureTemplate = {
                     if (!ServiceBus.overlayReady.value) {
