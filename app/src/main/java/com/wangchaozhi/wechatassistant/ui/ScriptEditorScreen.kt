@@ -786,7 +786,7 @@ internal fun EditActionDialog(
                             )
                             if (hasRegion) {
                                 Text(
-                                    "显示",
+                                    "显示区域",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.clickable { showActionPosition() },
