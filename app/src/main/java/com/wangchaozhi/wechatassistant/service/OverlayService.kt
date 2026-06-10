@@ -87,7 +87,7 @@ class OverlayService : LifecycleService() {
     private var recordResultText: TextView? = null
     private var recordResultRenameBtn: Button? = null
     private val bubbleHandler = Handler(Looper.getMainLooper())
-    private val hideBubble = Runnable { bubble?.visibility = View.GONE }
+    private val hideBubble = Runnable { bubble?.visibility = View.INVISIBLE }
     private val recordedTouches = mutableListOf<ServiceBus.RawTouch>()
     private val recordedPastes = mutableListOf<RecordedPasteStep>()
     private val recordedEnters = mutableListOf<Long>()
@@ -393,11 +393,12 @@ class OverlayService : LifecycleService() {
         val btnCollapse = compactBtn(ctx, "⋮") { collapsePanel() }
         val systemRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(4), 0, 0)
             showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
             dividerDrawable = rowSpacer
         }
+        val aiStatusBubble = buildBubble(ctx)
         val nodesRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -504,6 +505,11 @@ class OverlayService : LifecycleService() {
         templateRow.addView(templateLabel)
         templateRow.addView(btnTemplate)
         templateRow.addView(btnLiveRegionPick)
+        systemRow.addView(aiStatusBubble, LinearLayout.LayoutParams(
+            0,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            1f,
+        ))
         systemRow.addView(btnHome)
         systemRow.addView(btnClose)
         systemRow.addView(btnCollapse)
@@ -512,14 +518,16 @@ class OverlayService : LifecycleService() {
             addView(topRow)
             addView(nodesRow)
             addView(templateRow)
-            addView(systemRow)
+            addView(systemRow, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ))
         }
         panelContent = content
         // 收起后的竖排小工具条：手柄(拖动/展开) + 播放 + 选脚本 + 编辑所选脚本
         val collapsedBarView = buildCollapsedBar(ctx)
         collapsedBar = collapsedBarView
         container.addView(content)
-        container.addView(buildBubble(ctx))
         container.addView(collapsedBarView)
 
         val params = WindowManager.LayoutParams(
@@ -549,7 +557,7 @@ class OverlayService : LifecycleService() {
         if (collapsed) return
         collapsed = true
         panelContent?.visibility = View.GONE
-        bubble?.visibility = View.GONE
+        bubble?.visibility = View.INVISIBLE
         dismissRecordResult()
         collapsedBar?.visibility = View.VISIBLE
         // 停靠到屏幕右边缘
@@ -691,15 +699,17 @@ class OverlayService : LifecycleService() {
     }
 
     private fun buildBubble(ctx: Context): LinearLayout {
-        // 仅承载 AI 一闪而过的提示（请求中/结果），按钮型的「已保存」已抽成二级弹窗。
+        // 仅承载 AI 一闪而过的提示（请求中/结果），放在系统按钮行最左侧。
         val outer = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-            setPadding(0, dp(6), 0, 0)
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            visibility = View.INVISIBLE
+            setPadding(0, 0, dp(6), 0)
         }
         val status = TextView(ctx).apply {
-            textSize = 12f
+            textSize = 10f
             setTextColor(Color.WHITE)
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
             setPadding(dp(4), dp(2), dp(4), dp(2))
         }
         outer.addView(status)
@@ -721,7 +731,7 @@ class OverlayService : LifecycleService() {
         when (res) {
             is ServiceBus.AiResult.Success -> {
                 bubbleText?.setTextColor(Color.WHITE)
-                bubbleText?.text = "已复制到粘贴板可粘贴"
+                bubbleText?.text = "已复制到粘贴板"
             }
             is ServiceBus.AiResult.Failure -> {
                 bubbleText?.setTextColor(Color.parseColor("#FFB4AB"))
