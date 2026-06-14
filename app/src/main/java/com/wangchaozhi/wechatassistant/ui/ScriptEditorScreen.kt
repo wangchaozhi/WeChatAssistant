@@ -19,7 +19,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -623,6 +625,7 @@ internal fun EditActionDialog(
     var showPositionPreview by remember { mutableStateOf(false) }
     var showIfTemplateActions by remember { mutableStateOf(false) }
     var pendingGesturePickRequestId by remember { mutableStateOf<Long?>(null) }
+    val contentScrollState = rememberScrollState()
     val context = LocalContext.current
 
     fun showActionPosition() {
@@ -703,7 +706,7 @@ internal fun EditActionDialog(
         onDismissRequest = onDismiss,
         title = { Text("编辑 ${typeLabel(action.type)}") },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(contentScrollState)) {
                 AssistChip(onClick = {}, label = { Text("#${action.index + 1}  ${typeLabel(action.type)}") })
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
