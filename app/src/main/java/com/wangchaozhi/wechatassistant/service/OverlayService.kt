@@ -734,6 +734,11 @@ class OverlayService : LifecycleService() {
         bubbleHandler.removeCallbacks(hideBubble)
         bubble?.visibility = View.VISIBLE
         when (res) {
+            is ServiceBus.AiResult.Partial -> {
+                bubbleText?.setTextColor(Color.WHITE)
+                bubbleText?.text = "AI 生成中 ${res.answer.length}字"
+                return
+            }
             is ServiceBus.AiResult.Success -> {
                 bubbleText?.setTextColor(Color.WHITE)
                 bubbleText?.text = "已复制到粘贴板"

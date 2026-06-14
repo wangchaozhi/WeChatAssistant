@@ -626,7 +626,15 @@ class ClickerAccessibilityService : AccessibilityService() {
             ActionType.SCREENSHOT_AI -> {
                 val prompt = action.aiPrompt
                     ?: App.from(this@ClickerAccessibilityService).settingsRepo.defaultPrompt
-                ai.run(prompt, scriptId, action.aiProvider, action.aiModel, regionOf(action)).onFailure { /* swallow */ }
+                ai.run(
+                    prompt,
+                    scriptId,
+                    action.aiProvider,
+                    action.aiModel,
+                    regionOf(action),
+                    fastRegionCapture = action.aiFastRegionCapture,
+                    streamOutput = action.aiStreamOutput,
+                ).onFailure { /* swallow */ }
             }
             ActionType.IMAGE_MATCH -> {
                 val paths = TemplateMatchUseCase.splitTemplatePaths(action.templatePath)

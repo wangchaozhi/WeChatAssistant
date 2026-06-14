@@ -8,6 +8,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -40,8 +42,10 @@ class ModelScopeRepository(
         maxSide: Int = 1280,
         quality: Int = 80,
         reasoningEffort: AiReasoningEffort = AiReasoningEffort.DEFAULT,
+        onPartial: ((String) -> Unit)? = null,
     ): Result<String> = withContext(Dispatchers.IO) {
         val totalStart = SystemClock.uptimeMillis()
+        val streaming = onPartial != null
         val key = apiKeyProvider().trim()
         if (key.isEmpty()) return@withContext Result.failure(
             IllegalStateException("尚未配置魔搭 API Key，请到设置中填入。")
@@ -50,7 +54,7 @@ class ModelScopeRepository(
         val base64 = bitmap.toBase64Jpeg(quality = quality, maxSide = maxSide)
         val encodeMs = SystemClock.uptimeMillis() - encodeStart
         val bodyStart = SystemClock.uptimeMillis()
-        val body = buildRequestBody(model, prompt, base64, reasoningEffort)
+        val body = buildRequestBody(model, prompt, base64, reasoningEffort, streaming)
         val requestJson = body.toString()
         val bodyMs = SystemClock.uptimeMillis() - bodyStart
         val req = Request.Builder()
@@ -60,7 +64,7 @@ class ModelScopeRepository(
             .post(requestJson.toRequestBody(JSON_MEDIA))
             .build()
         debugLog(
-            "ModelScope ask start model=$model image=${bitmap.width}x${bitmap.height} " +
+            "ModelScope ask start stream=$streaming model=$model image=${bitmap.width}x${bitmap.height} " +
                 "maxSide=$maxSide quality=$quality promptLen=${prompt.length} " +
                 "encode=${encodeMs}ms body=${bodyMs}ms base64Chars=${base64.length} " +
                 "requestChars=${requestJson.length}"
@@ -68,9 +72,9 @@ class ModelScopeRepository(
         try {
             val httpStart = SystemClock.uptimeMillis()
             client.newCall(req).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
                 val httpMs = SystemClock.uptimeMillis() - httpStart
                 if (!resp.isSuccessful) {
+                    val text = resp.body?.string().orEmpty()
                     debugLog(
                         "ModelScope ask failure code=${resp.code} http=${httpMs}ms " +
                             "total=${SystemClock.uptimeMillis() - totalStart}ms bodyChars=${text.length}"
@@ -79,6 +83,10 @@ class ModelScopeRepository(
                         IOException("ModelScope HTTP ${resp.code}: ${text.take(300)}")
                     )
                 }
+                if (streaming) {
+                    return@withContext readStreamingAnswer(resp, totalStart, httpStart, onPartial!!)
+                }
+                val text = resp.body?.string().orEmpty()
                 val parseStart = SystemClock.uptimeMillis()
                 val answer = parseAnswer(text)
                 val parseMs = SystemClock.uptimeMillis() - parseStart
@@ -138,6 +146,7 @@ class ModelScopeRepository(
         prompt: String,
         base64: String,
         reasoningEffort: AiReasoningEffort,
+        streaming: Boolean,
     ): JsonObject =
         buildJsonObject {
             put("model", model)
@@ -160,13 +169,80 @@ class ModelScopeRepository(
             })
             reasoningEffort.enableThinking?.let { put("enable_thinking", it) }
             reasoningEffort.thinkingBudget?.let { put("thinking_budget", it) }
+            if (streaming) {
+                put("stream", true)
+                put("stream_options", buildJsonObject {
+                    put("include_usage", true)
+                })
+            }
         }
+
+    private fun readStreamingAnswer(
+        resp: okhttp3.Response,
+        totalStart: Long,
+        httpStart: Long,
+        onPartial: (String) -> Unit,
+    ): Result<String> {
+        val source = resp.body?.source()
+            ?: return Result.failure(IOException("ModelScope HTTP ${resp.code}: empty body"))
+        val parts = StringBuilder()
+        var firstChunkMs: Long? = null
+        var dataLines = 0
+        while (true) {
+            val line = source.readUtf8Line() ?: break
+            if (!line.startsWith("data:")) continue
+            val data = line.removePrefix("data:").trim()
+            if (data.isEmpty() || data == "[DONE]") continue
+            dataLines += 1
+            val delta = runCatching { parseStreamDelta(data) }.getOrElse {
+                debugLog("ModelScope stream parse skipped: ${it.javaClass.simpleName}: ${it.message}")
+                ""
+            }
+            if (delta.isEmpty()) continue
+            if (firstChunkMs == null) {
+                firstChunkMs = SystemClock.uptimeMillis() - httpStart
+                debugLog("ModelScope stream firstChunk=${firstChunkMs}ms")
+            }
+            parts.append(delta)
+            onPartial(parts.toString())
+        }
+        val answer = parts.toString().trim()
+        debugLog(
+            "ModelScope stream success code=${resp.code} firstChunk=${firstChunkMs ?: -1}ms " +
+                "http=${SystemClock.uptimeMillis() - httpStart}ms " +
+                "total=${SystemClock.uptimeMillis() - totalStart}ms chunks=$dataLines answerLen=${answer.length}"
+        )
+        return if (answer.isEmpty()) {
+            Result.failure(IOException("ModelScope stream returned empty answer"))
+        } else {
+            Result.success(answer)
+        }
+    }
+
+    private fun parseStreamDelta(raw: String): String {
+        val root = json.parseToJsonElement(raw).jsonObject
+        val first = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject ?: return ""
+        val delta = first["delta"]?.jsonObject ?: return ""
+        val content = delta["content"] ?: return ""
+        return extractText(content)
+    }
 
     private fun parseAnswer(raw: String): String {
         val root = json.parseToJsonElement(raw).jsonObject
         val choices = root["choices"]?.jsonArray ?: return raw
         val message = choices.firstOrNull()?.jsonObject?.get("message")?.jsonObject ?: return raw
         return message["content"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty().ifEmpty { raw }
+    }
+
+    private fun extractText(content: JsonElement): String = when (content) {
+        is JsonArray -> content.joinToString("\n") { item ->
+            when (item) {
+                is JsonObject -> item["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                else -> item.toString()
+            }
+        }.trim()
+        is JsonObject -> content["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        else -> content.jsonPrimitive.contentOrNull.orEmpty()
     }
 
     companion object {

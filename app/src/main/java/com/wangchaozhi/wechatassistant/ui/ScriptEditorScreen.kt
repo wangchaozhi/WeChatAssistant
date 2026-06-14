@@ -49,6 +49,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -617,6 +618,8 @@ internal fun EditActionDialog(
     // AI 节点：供应商（null=跟随全局）与具体模型。
     var aiProvider by remember { mutableStateOf(AiProvider.parse(action.aiProvider)) }
     var aiModel by remember { mutableStateOf(action.aiModel.orEmpty()) }
+    var aiFastRegionCapture by remember { mutableStateOf(action.aiFastRegionCapture) }
+    var aiStreamOutput by remember { mutableStateOf(action.aiStreamOutput) }
     var showPositionPreview by remember { mutableStateOf(false) }
     var showIfTemplateActions by remember { mutableStateOf(false) }
     var pendingGesturePickRequestId by remember { mutableStateOf<Long?>(null) }
@@ -871,6 +874,55 @@ internal fun EditActionDialog(
                             }
                         }
                     }
+                    Spacer(Modifier.height(6.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("快速区域截图", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "有问答区域时直接截区域图；关闭后等流帧稳定再截图",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = aiFastRegionCapture,
+                                onCheckedChange = { aiFastRegionCapture = it },
+                                enabled = hasRegion,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("流式输出", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "边生成边更新悬浮结果；关闭后等待完整回答",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = aiStreamOutput,
+                                onCheckedChange = { aiStreamOutput = it },
+                            )
+                        }
+                    }
                 }
                 if (action.type == ActionType.IMAGE_MATCH) {
                     val count = templateCount(action.templatePath)
@@ -1005,6 +1057,8 @@ internal fun EditActionDialog(
                         alias = alias.ifBlank { null },
                         aiProvider = aiProvider?.name,
                         aiModel = if (aiProvider == null) null else aiModel.ifBlank { null },
+                        aiFastRegionCapture = aiFastRegionCapture,
+                        aiStreamOutput = aiStreamOutput,
                         callScriptId = if (action.type == ActionType.CALL_SCRIPT) callScriptId else action.callScriptId,
                     )
                 )

@@ -12,6 +12,7 @@ import com.wangchaozhi.wechatassistant.data.model.Script
 import com.wangchaozhi.wechatassistant.data.model.ScriptTrigger
 import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.data.repo.ScriptRepository
+import com.wangchaozhi.wechatassistant.data.repo.ScriptTransfer
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.data.repo.TriggerRepository
 import kotlinx.coroutines.flow.Flow
@@ -43,6 +44,7 @@ class MainViewModel(
     private val settings: SettingsRepository,
     private val visionAi: VisionAiRepository,
     private val triggerRepo: TriggerRepository,
+    private val scriptTransfer: ScriptTransfer,
 ) : ViewModel() {
 
     var settingsModelsFetchedThisRun: Boolean = false
@@ -223,6 +225,12 @@ class MainViewModel(
 
     suspend fun loadGraphScript(id: Long) = scriptRepo.loadGraph(id)
 
+    suspend fun exportScripts(ids: Collection<Long>): Result<String> =
+        runCatching { scriptTransfer.exportScripts(ids) }
+
+    suspend fun importScripts(raw: String): Result<Int> =
+        runCatching { scriptTransfer.importScripts(raw) }
+
     fun saveScript(
         script: Script,
         actions: List<Action>,
@@ -273,6 +281,7 @@ class MainViewModel(
                     app.settingsRepo,
                     app.visionAi,
                     app.triggerRepo,
+                    ScriptTransfer(app, app.scriptRepo),
                 ) as T
         }
     }

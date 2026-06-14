@@ -677,6 +677,37 @@ private fun AiImageCard(side: Int, onSide: (Int) -> Unit) {
 }
 
 @Composable
+private fun AiStreamCard(enabled: Boolean, onEnabled: (Boolean) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Row(
+            Modifier.padding(16.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SettingsIcon(Icons.Filled.Refresh)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text("AI 流式输出", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    if (enabled) {
+                        "边生成边更新回答，首段更快但总耗时可能不变"
+                    } else {
+                        "等待完整回答后再复制，保持原来的稳定方式"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Switch(checked = enabled, onCheckedChange = onEnabled)
+        }
+    }
+}
+
+@Composable
 private fun AiHistoryCard(enabled: Boolean, onEnabled: (Boolean) -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),

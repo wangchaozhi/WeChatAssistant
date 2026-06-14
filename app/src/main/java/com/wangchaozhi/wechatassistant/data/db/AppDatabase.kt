@@ -26,8 +26,9 @@ class Converters {
     // v10：移除 AI_TAP / SNAPSHOT / IF_PAGE_CHANGED / IF_TEXT_EXISTS 四种节点，ActionType 序号重排。
     // 不提供 9→10 迁移，靠 fallbackToDestructiveMigration 销毁重建（旧脚本数据按需求一并清空）。
     // v12：CALL_SCRIPT 节点新增 callScriptId 列。v13：新增 triggers 触发器表。
-    // v14：找图节点新增 upFallbackPx（上方容错）列。
-    version = 14,
+    // v14：找图节点新增 upFallbackPx（上方容错）列。v15：AI 节点新增快速区域截图开关。
+    // v16：AI 节点新增流式输出开关。
+    version = 16,
     exportSchema = false,
 )
 @TypeConverters(Converters::class)
@@ -105,6 +106,20 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_13_14 = object : Migration(13, 14) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE actions ADD COLUMN upFallbackPx INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        // AI 节点新增「快速区域截图」开关，默认开启，保留当前高速行为。
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE actions ADD COLUMN aiFastRegionCapture INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
+        // AI 节点新增「流式输出」开关，默认关闭，保持原来的完整回答方式。
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE actions ADD COLUMN aiStreamOutput INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

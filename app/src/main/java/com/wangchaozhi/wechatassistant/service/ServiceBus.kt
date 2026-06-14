@@ -41,6 +41,7 @@ object ServiceBus {
     val lastAiAnswer = MutableStateFlow<String?>(null)
 
     sealed interface AiResult {
+        data class Partial(val answer: String) : AiResult
         data class Success(val answer: String) : AiResult
         data class Failure(val message: String) : AiResult
     }

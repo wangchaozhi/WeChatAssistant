@@ -41,8 +41,10 @@ class QwenRepository(
         maxSide: Int = 1280,
         quality: Int = 80,
         reasoningEffort: AiReasoningEffort = AiReasoningEffort.DEFAULT,
+        onPartial: ((String) -> Unit)? = null,
     ): Result<String> = withContext(Dispatchers.IO) {
         val totalStart = SystemClock.uptimeMillis()
+        val streaming = onPartial != null
         val key = apiKeyProvider().trim()
         if (key.isEmpty()) return@withContext Result.failure(
             IllegalStateException("尚未配置千问 API Key，请到设置中填入。")
@@ -51,17 +53,20 @@ class QwenRepository(
         val base64 = bitmap.toBase64Jpeg(quality = quality, maxSide = maxSide)
         val encodeMs = SystemClock.uptimeMillis() - encodeStart
         val bodyStart = SystemClock.uptimeMillis()
-        val body = buildRequestBody(model, prompt, base64, reasoningEffort)
+        val body = buildRequestBody(model, prompt, base64, reasoningEffort, streaming)
         val requestJson = body.toString()
         val bodyMs = SystemClock.uptimeMillis() - bodyStart
         val req = Request.Builder()
             .url(ENDPOINT)
             .addHeader("Authorization", "Bearer $key")
             .addHeader("Content-Type", "application/json")
+            .apply {
+                if (streaming) addHeader("X-DashScope-SSE", "enable")
+            }
             .post(requestJson.toRequestBody(JSON_MEDIA))
             .build()
         debugLog(
-            "Qwen ask start model=$model image=${bitmap.width}x${bitmap.height} " +
+            "Qwen ask start stream=$streaming model=$model image=${bitmap.width}x${bitmap.height} " +
                 "maxSide=$maxSide quality=$quality promptLen=${prompt.length} " +
                 "encode=${encodeMs}ms body=${bodyMs}ms base64Chars=${base64.length} " +
                 "requestChars=${requestJson.length}"
@@ -69,9 +74,9 @@ class QwenRepository(
         try {
             val httpStart = SystemClock.uptimeMillis()
             client.newCall(req).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
                 val httpMs = SystemClock.uptimeMillis() - httpStart
                 if (!resp.isSuccessful) {
+                    val text = resp.body?.string().orEmpty()
                     debugLog(
                         "Qwen ask failure code=${resp.code} http=${httpMs}ms " +
                             "total=${SystemClock.uptimeMillis() - totalStart}ms bodyChars=${text.length}"
@@ -80,6 +85,10 @@ class QwenRepository(
                         IOException("Qwen HTTP ${resp.code}: ${text.take(300)}")
                     )
                 }
+                if (streaming) {
+                    return@withContext readStreamingAnswer(resp, totalStart, httpStart, onPartial!!)
+                }
+                val text = resp.body?.string().orEmpty()
                 val parseStart = SystemClock.uptimeMillis()
                 val answer = parseAnswer(text)
                 val parseMs = SystemClock.uptimeMillis() - parseStart
@@ -139,6 +148,7 @@ class QwenRepository(
         prompt: String,
         base64: String,
         reasoningEffort: AiReasoningEffort,
+        streaming: Boolean,
     ): JsonObject =
         buildJsonObject {
             put("model", model)
@@ -159,10 +169,62 @@ class QwenRepository(
             })
             put("parameters", buildJsonObject {
                 put("result_format", "message")
+                if (streaming) put("incremental_output", true)
                 reasoningEffort.enableThinking?.let { put("enable_thinking", it) }
                 reasoningEffort.thinkingBudget?.let { put("thinking_budget", it) }
             })
         }
+
+    private fun readStreamingAnswer(
+        resp: okhttp3.Response,
+        totalStart: Long,
+        httpStart: Long,
+        onPartial: (String) -> Unit,
+    ): Result<String> {
+        val source = resp.body?.source()
+            ?: return Result.failure(IOException("Qwen HTTP ${resp.code}: empty body"))
+        val parts = StringBuilder()
+        var firstChunkMs: Long? = null
+        var dataLines = 0
+        while (true) {
+            val line = source.readUtf8Line() ?: break
+            if (!line.startsWith("data:")) continue
+            val data = line.removePrefix("data:").trim()
+            if (data.isEmpty() || data == "[DONE]") continue
+            dataLines += 1
+            val delta = runCatching { parseStreamDelta(data) }.getOrElse {
+                debugLog("Qwen stream parse skipped: ${it.javaClass.simpleName}: ${it.message}")
+                ""
+            }
+            if (delta.isEmpty()) continue
+            if (firstChunkMs == null) {
+                firstChunkMs = SystemClock.uptimeMillis() - httpStart
+                debugLog("Qwen stream firstChunk=${firstChunkMs}ms")
+            }
+            parts.append(delta)
+            onPartial(parts.toString())
+        }
+        val answer = parts.toString().trim()
+        debugLog(
+            "Qwen stream success code=${resp.code} firstChunk=${firstChunkMs ?: -1}ms " +
+                "http=${SystemClock.uptimeMillis() - httpStart}ms " +
+                "total=${SystemClock.uptimeMillis() - totalStart}ms chunks=$dataLines answerLen=${answer.length}"
+        )
+        return if (answer.isEmpty()) {
+            Result.failure(IOException("Qwen stream returned empty answer"))
+        } else {
+            Result.success(answer)
+        }
+    }
+
+    private fun parseStreamDelta(raw: String): String {
+        val root = json.parseToJsonElement(raw).jsonObject
+        val output = root["output"]?.jsonObject ?: return ""
+        val first = output["choices"]?.jsonArray?.firstOrNull()?.jsonObject ?: return ""
+        val message = first["message"]?.jsonObject ?: return ""
+        val content = message["content"] ?: return ""
+        return extractText(content)
+    }
 
     private fun parseAnswer(raw: String): String {
         val root = json.parseToJsonElement(raw).jsonObject

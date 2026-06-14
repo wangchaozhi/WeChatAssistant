@@ -39,6 +39,7 @@ class VisionAiRepository(
         modelName: String?,
         maxSide: Int = 1280,
         quality: Int = 80,
+        onPartial: ((String) -> Unit)? = null,
     ): Result<String> {
         val (provider, model) = resolve(providerName, modelName)
         val reasoningEffort = defaultReasoningEffort()
@@ -50,6 +51,7 @@ class VisionAiRepository(
                 maxSide = maxSide,
                 quality = quality,
                 reasoningEffort = reasoningEffort,
+                onPartial = onPartial,
             )
             AiProvider.MODELSCOPE -> modelScope.ask(
                 bitmap,
@@ -58,6 +60,7 @@ class VisionAiRepository(
                 maxSide = maxSide,
                 quality = quality,
                 reasoningEffort = reasoningEffort,
+                onPartial = onPartial,
             )
         }
     }

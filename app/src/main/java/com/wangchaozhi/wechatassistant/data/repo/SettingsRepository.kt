@@ -61,6 +61,10 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt(KEY_AI_SIDE, DEFAULT_AI_SIDE)
         set(value) = prefs.edit { putInt(KEY_AI_SIDE, value.coerceIn(MIN_IMAGE_SIDE, MAX_IMAGE_SIDE)) }
 
+    var aiStreamOutput: Boolean
+        get() = prefs.getBoolean(KEY_AI_STREAM_OUTPUT, DEFAULT_AI_STREAM_OUTPUT)
+        set(value) = prefs.edit { putBoolean(KEY_AI_STREAM_OUTPUT, value) }
+
     fun cachedModels(providerName: String): List<String> =
         prefs.getString("$KEY_MODEL_CACHE_PREFIX$providerName", "")
             .orEmpty()
@@ -182,6 +186,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_THUMB_SIDE = "thumb_max_side"
         private const val KEY_SAVE_AI_HISTORY = "save_ai_history"
         private const val KEY_AI_SIDE = "ai_image_max_side"
+        private const val KEY_AI_STREAM_OUTPUT = "ai_stream_output"
         private const val KEY_MODEL_CACHE_PREFIX = "model_cache_"
         private const val KEY_ADB_HOST = "adb_host"
         private const val KEY_ADB_PAIR_PORT = "adb_pair_port"
@@ -208,6 +213,7 @@ class SettingsRepository(context: Context) {
         const val DEFAULT_THUMB_SIDE = 480
         const val DEFAULT_SAVE_AI_HISTORY = true
         const val DEFAULT_AI_SIDE = 1024
+        const val DEFAULT_AI_STREAM_OUTPUT = false
         const val DEFAULT_ADB_HOST = "127.0.0.1"
     }
 }

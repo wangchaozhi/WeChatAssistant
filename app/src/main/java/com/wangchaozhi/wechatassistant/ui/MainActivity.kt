@@ -82,6 +82,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -94,11 +95,15 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.wangchaozhi.wechatassistant.App
 import com.wangchaozhi.wechatassistant.data.model.Script
+import com.wangchaozhi.wechatassistant.data.repo.ScriptTransfer
 import com.wangchaozhi.wechatassistant.data.repo.SettingsRepository
 import com.wangchaozhi.wechatassistant.service.CaptureForegroundService
 import com.wangchaozhi.wechatassistant.service.OverlayService
 import com.wangchaozhi.wechatassistant.service.ServiceBus
 import com.wangchaozhi.wechatassistant.ui.theme.WcaTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -127,6 +132,66 @@ class MainActivity : ComponentActivity() {
         val data = result.data
         if (result.resultCode == Activity.RESULT_OK && data != null) {
             CaptureForegroundService.start(this, result.resultCode, data)
+        }
+    }
+
+    private var pendingExportScriptIds: Set<Long> = emptySet()
+
+    private val exportScriptsLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument(ScriptTransfer.MIME_TYPE)
+    ) { uri ->
+        val ids = pendingExportScriptIds
+        pendingExportScriptIds = emptySet()
+        if (uri == null || ids.isEmpty()) return@registerForActivityResult
+        lifecycleScope.launch {
+            val result = viewModel.exportScripts(ids)
+            result.fold(
+                onSuccess = { text ->
+                    runCatching {
+                        withContext(Dispatchers.IO) {
+                            contentResolver.openOutputStream(uri)?.use { out ->
+                                out.write(text.toByteArray(Charsets.UTF_8))
+                            } ?: error("无法打开导出文件")
+                        }
+                    }.onSuccess {
+                        Toast.makeText(this@MainActivity, "已导出 ${ids.size} 个脚本", Toast.LENGTH_SHORT).show()
+                    }.onFailure {
+                        Toast.makeText(this@MainActivity, "导出失败：${it.message}", Toast.LENGTH_LONG).show()
+                    }
+                },
+                onFailure = {
+                    Toast.makeText(this@MainActivity, "导出失败：${it.message}", Toast.LENGTH_LONG).show()
+                },
+            )
+        }
+    }
+
+    private val importScriptsLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        lifecycleScope.launch {
+            val raw = runCatching {
+                withContext(Dispatchers.IO) {
+                    contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                        ?: error("无法读取导入文件")
+                }
+            }
+            raw.fold(
+                onSuccess = { text ->
+                    viewModel.importScripts(text).fold(
+                        onSuccess = { count ->
+                            Toast.makeText(this@MainActivity, "已导入 $count 个脚本", Toast.LENGTH_SHORT).show()
+                        },
+                        onFailure = {
+                            Toast.makeText(this@MainActivity, "导入失败：${it.message}", Toast.LENGTH_LONG).show()
+                        },
+                    )
+                },
+                onFailure = {
+                    Toast.makeText(this@MainActivity, "导入失败：${it.message}", Toast.LENGTH_LONG).show()
+                },
+            )
         }
     }
 
@@ -169,6 +234,14 @@ class MainActivity : ComponentActivity() {
                             onOpenDebugLog = { viewModel.navigate(Screen.Settings(openDebugLog = true)) },
                             onCreateScript = {
                                 viewModel.navigate(Screen.Editor(null))
+                            },
+                            onExportScripts = { ids ->
+                                pendingExportScriptIds = ids
+                                val ts = SimpleDateFormat("yyyyMMdd_HHmm", Locale.getDefault()).format(Date())
+                                exportScriptsLauncher.launch("wechat_assistant_scripts_$ts.json")
+                            },
+                            onImportScripts = {
+                                importScriptsLauncher.launch(arrayOf(ScriptTransfer.MIME_TYPE, "text/*", "*/*"))
                             },
                             onRequestNotificationPermission = ::requestNotificationPermission,
                             onRequestOverlayPermission = ::requestOverlayPermission,
@@ -289,6 +362,8 @@ private fun MainScreen(
     onOpenSettings: () -> Unit,
     onOpenDebugLog: () -> Unit,
     onCreateScript: () -> Unit,
+    onExportScripts: (Set<Long>) -> Unit,
+    onImportScripts: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onRequestOverlayPermission: () -> Unit,
     onRequestAccessibility: () -> Unit,
@@ -308,6 +383,8 @@ private fun MainScreen(
     val recordEngine by viewModel.recordEngineState.collectAsState()
     val recordModeDescription = recordingModeDescription(recordEngine)
     var pendingDeleteScript by remember { mutableStateOf<Script?>(null) }
+    var exportMode by remember { mutableStateOf(false) }
+    var exportSelection by remember { mutableStateOf<Set<Long>>(emptySet()) }
 
     var overlayGranted by remember { mutableStateOf(Settings.canDrawOverlays(ctx)) }
     var notifGranted by remember { mutableStateOf(checkNotificationGranted(ctx)) }
@@ -416,24 +493,73 @@ private fun MainScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("脚本", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                         Text(
-                            if (scripts.isEmpty()) "还没有脚本，点 + 新建或在悬浮窗录制"
-                            else "${scripts.size} 个可用脚本",
+                            if (exportMode) "选择要导出的脚本" else "脚本",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            when {
+                                exportMode -> "已选 ${exportSelection.size} 个"
+                                scripts.isEmpty() -> "还没有脚本，点 + 新建或在悬浮窗录制"
+                                else -> "${scripts.size} 个可用脚本"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    IconButton(onClick = onCreateScript) {
-                        Icon(Icons.Filled.Add, contentDescription = "新建脚本")
+                    if (exportMode) {
+                        TextButton(onClick = {
+                            exportMode = false
+                            exportSelection = emptySet()
+                        }) {
+                            Text("取消")
+                        }
+                        TextButton(
+                            onClick = {
+                                onExportScripts(exportSelection)
+                                exportMode = false
+                                exportSelection = emptySet()
+                            },
+                            enabled = exportSelection.isNotEmpty(),
+                        ) {
+                            Text("导出")
+                        }
+                    } else {
+                        TextButton(onClick = onImportScripts) {
+                            Text("导入")
+                        }
+                        TextButton(
+                            onClick = {
+                                exportMode = true
+                                exportSelection = emptySet()
+                            },
+                            enabled = scripts.isNotEmpty(),
+                        ) {
+                            Text("批量")
+                        }
+                        IconButton(onClick = onCreateScript) {
+                            Icon(Icons.Filled.Add, contentDescription = "新建脚本")
+                        }
                     }
                 }
             }
             items(scripts, key = { it.id }) { s ->
                 ScriptItem(
                     script = s,
-                    selected = s.id == selectedScriptId,
-                    onSelect = { viewModel.selectScript(s.id) },
+                    selected = if (exportMode) s.id in exportSelection else s.id == selectedScriptId,
+                    exportMode = exportMode,
+                    onSelect = {
+                        if (exportMode) {
+                            exportSelection = if (s.id in exportSelection) {
+                                exportSelection - s.id
+                            } else {
+                                exportSelection + s.id
+                            }
+                        } else {
+                            viewModel.selectScript(s.id)
+                        }
+                    },
                     onEdit = { onOpenEditor(s.id) },
                     onTriggers = { onOpenTriggers(s.id) },
                     onDelete = { pendingDeleteScript = s },
@@ -854,6 +980,7 @@ private fun PlayerStatusCard(
 private fun ScriptItem(
     script: Script,
     selected: Boolean,
+    exportMode: Boolean = false,
     onSelect: () -> Unit,
     onEdit: () -> Unit,
     onTriggers: () -> Unit,
@@ -890,7 +1017,11 @@ private fun ScriptItem(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    Icons.Filled.TouchApp,
+                    if (exportMode) {
+                        if (selected) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked
+                    } else {
+                        Icons.Filled.TouchApp
+                    },
                     contentDescription = if (selected) "已选脚本" else null,
                     tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
                 )
@@ -905,7 +1036,7 @@ private fun ScriptItem(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    (if (selected) "已选 · " else "") +
+                    (if (selected && !exportMode) "已选 · " else "") +
                         "循环 ${script.loopCount} 次 · 速度 ${script.speed}x · $createdAtText",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -913,17 +1044,19 @@ private fun ScriptItem(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            IconButton(onClick = onTriggers) {
-                Icon(Icons.Filled.Notifications, contentDescription = "触发器")
-            }
-            IconButton(onClick = onEdit) {
-                Icon(Icons.Filled.Edit, contentDescription = "编辑")
-            }
-            IconButton(onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                onDelete()
-            }) {
-                Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+            if (!exportMode) {
+                IconButton(onClick = onTriggers) {
+                    Icon(Icons.Filled.Notifications, contentDescription = "触发器")
+                }
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Filled.Edit, contentDescription = "编辑")
+                }
+                IconButton(onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onDelete()
+                }) {
+                    Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+                }
             }
         }
     }

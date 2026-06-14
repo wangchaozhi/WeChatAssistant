@@ -33,6 +33,7 @@ object ActionDefaults {
     const val DEFAULT_IMAGE_DOWN_FALLBACK_PX = 150
     // 上方容错默认关闭：仅在严格区域+下方兜底都没命中后，才按需向上再补一段搜索。0=不向上补。
     const val DEFAULT_IMAGE_UP_FALLBACK_PX = 0
+    const val DEFAULT_AI_FAST_REGION_CAPTURE = true
 }
 
 @Entity(
@@ -82,6 +83,10 @@ data class Action(
     // 为 null 表示跟随全局设置。
     val aiProvider: String? = null,
     val aiModel: String? = null,
+    // AI 节点专用：有框选区域时直接截区域图，速度更快；关闭则走流帧判稳后再裁区域。
+    val aiFastRegionCapture: Boolean = ActionDefaults.DEFAULT_AI_FAST_REGION_CAPTURE,
+    // AI 节点专用：边生成边更新悬浮结果；默认关闭，保持等待完整回答的稳定方式。
+    val aiStreamOutput: Boolean = false,
     // PASTE 节点专用：录制时捕获的剪贴板文本。为空时回放仍使用当前 AI 答案/剪贴板。
     val pasteText: String? = null,
     // CALL_SCRIPT 节点专用：要调用的目标脚本 id。为空时该节点跳过。
