@@ -3,7 +3,9 @@ package com.wangchaozhi.wechatassistant.feature.ai
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.SystemClock
 import com.wangchaozhi.wechatassistant.App
+import com.wangchaozhi.wechatassistant.BuildConfig
 import com.wangchaozhi.wechatassistant.data.repo.AiAnswerRepository
 import com.wangchaozhi.wechatassistant.feature.match.RegionDiff
 import com.wangchaozhi.wechatassistant.service.ServiceBus
@@ -26,23 +28,44 @@ class ScreenshotAiUseCase(
         model: String? = null,
         region: Rect? = null,
     ): Result<String> {
+        val app = App.from(context)
+        val totalStart = SystemClock.uptimeMillis()
         if (!ServiceBus.captureReady.value) {
+            debugLog(app, "AI screenshot failed: capture service not ready")
             return Result.failure(IllegalStateException("截图服务未启动，请先在主界面开启屏幕共享。"))
         }
         // 优先复用截图流的最新帧：流帧本就是「无悬浮窗」的连续画面，省掉 JustCapture 每次必付的
         // ~180ms 隐藏悬浮窗等待——热流下取下一帧仅约一个帧间隔(25ms)。流由本节点幂等开启、不主动
         // 关闭，连续 AI 节点复用同一路热流（仅首个节点付一次预热），由 runGraph 的 finally 统一关流。
         // 整屏流帧的 region 裁剪交给 runWithBitmap；流不可用/超时再回退到主动截图。
+        debugLog(
+            app,
+            "AI screenshot start scriptId=${scriptId ?: "-"} provider=${provider ?: "default"} " +
+                "model=${model ?: "default"} region=$region promptLen=${prompt.length}"
+        )
+        val streamStart = SystemClock.uptimeMillis()
         val streamBitmap = grabFreshStreamFrame()
+        val streamMs = SystemClock.uptimeMillis() - streamStart
         if (streamBitmap != null) {
-            return runWithBitmap(streamBitmap, prompt, scriptId, provider, model, region)
+            debugLog(app, "AI screenshot capture source=stream wait=${streamMs}ms size=${streamBitmap.width}x${streamBitmap.height}")
+            val result = runWithBitmap(streamBitmap, prompt, scriptId, provider, model, region)
+            debugLogResult(app, "AI screenshot total source=stream", result, totalStart)
+            return result
         }
+        debugLog(app, "AI screenshot stream unavailable wait=${streamMs}ms, fallback=JustCapture")
+        val captureStart = SystemClock.uptimeMillis()
         val bitmap = withTimeoutOrNull(5_000) {
             ServiceBus.lastBitmap.value = null
             ServiceBus.captureCmd.tryEmit(ServiceBus.CaptureCmd.JustCapture(region))
             ServiceBus.lastBitmap.first { it != null }!!
-        } ?: return Result.failure(IllegalStateException("截图超时。"))
-        return runWithBitmap(bitmap, prompt, scriptId, provider, model)
+        } ?: run {
+            debugLog(app, "AI screenshot capture timeout total=${SystemClock.uptimeMillis() - totalStart}ms")
+            return Result.failure(IllegalStateException("截图超时。"))
+        }
+        debugLog(app, "AI screenshot capture source=JustCapture wait=${SystemClock.uptimeMillis() - captureStart}ms size=${bitmap.width}x${bitmap.height}")
+        val result = runWithBitmap(bitmap, prompt, scriptId, provider, model)
+        debugLogResult(app, "AI screenshot total source=JustCapture", result, totalStart)
+        return result
     }
 
     /**
@@ -85,14 +108,25 @@ class ScreenshotAiUseCase(
         model: String? = null,
         region: Rect? = null,
     ): Result<String> {
+        val totalStart = SystemClock.uptimeMillis()
         val app = App.from(context)
         val settings = app.settingsRepo
         val maxSide = settings.aiImageMaxSide
         val quality = qualityFor(maxSide)
         val effective = prompt.ifBlank { settings.defaultPrompt }
         val (usedProvider, usedModel) = vision.resolve(provider, model)
+        val cropStart = SystemClock.uptimeMillis()
         val askBitmap = region?.let { cropBitmapByScreenRect(bitmap, it) } ?: bitmap
+        val cropMs = SystemClock.uptimeMillis() - cropStart
+        debugLog(
+            app,
+            "AI ask prepare provider=${usedProvider.name} model=$usedModel " +
+                "source=${bitmap.width}x${bitmap.height} ask=${askBitmap.width}x${askBitmap.height} " +
+                "region=$region maxSide=$maxSide quality=$quality crop=${cropMs}ms promptLen=${effective.length}"
+        )
+        val askStart = SystemClock.uptimeMillis()
         val result = vision.ask(askBitmap, effective, provider, model, maxSide = maxSide, quality = quality)
+        val askMs = SystemClock.uptimeMillis() - askStart
         var savingInBackground = false
         result.onSuccess { answer ->
             context.copyToClipboard(answer)
@@ -112,7 +146,26 @@ class ScreenshotAiUseCase(
             }
         }
         if (askBitmap !== bitmap && !savingInBackground) askBitmap.recycle()
+        debugLogResult(
+            app,
+            "AI ask finish provider=${usedProvider.name} model=$usedModel ask=${askMs}ms crop=${cropMs}ms",
+            result,
+            totalStart,
+        )
         return result
+    }
+
+    private fun debugLog(app: App, message: String) {
+        if (BuildConfig.DEBUG) app.appendLog(message)
+    }
+
+    private fun debugLogResult(app: App, prefix: String, result: Result<String>, startMs: Long) {
+        if (!BuildConfig.DEBUG) return
+        val totalMs = SystemClock.uptimeMillis() - startMs
+        result.fold(
+            onSuccess = { app.appendLog("$prefix success total=${totalMs}ms answerLen=${it.length}") },
+            onFailure = { app.appendLog("$prefix failure total=${totalMs}ms err=${it.javaClass.simpleName}: ${it.message}") },
+        )
     }
 
     private fun cropBitmapByScreenRect(bmp: Bitmap, rect: Rect): Bitmap? {

@@ -17,12 +17,14 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.wangchaozhi.wechatassistant.App
+import com.wangchaozhi.wechatassistant.BuildConfig
 import com.wangchaozhi.wechatassistant.R
 import com.wangchaozhi.wechatassistant.ui.MainActivity
 import kotlinx.coroutines.CompletableDeferred
@@ -65,29 +67,49 @@ class CaptureForegroundService : LifecycleService() {
                     ServiceBus.CaptureCmd.StopStream -> stopFrameStream()
                     is ServiceBus.CaptureCmd.TakeAndAsk -> {
                         val app = App.from(this@CaptureForegroundService)
-                        app.appendLog("TakeAndAsk start, prompt='${cmd.prompt}'")
+                        val totalStart = SystemClock.uptimeMillis()
+                        debugLog(app, "TakeAndAsk start region=${cmd.region} promptLen=${cmd.prompt.length}")
+                        val captureStart = SystemClock.uptimeMillis()
                         val bmp = captureExcludingOverlay(cmd.region)
                         if (bmp == null) {
-                            app.appendLog("capture() returned null")
+                            debugLog(
+                                app,
+                                "TakeAndAsk capture returned null capture=${SystemClock.uptimeMillis() - captureStart}ms " +
+                                    "total=${SystemClock.uptimeMillis() - totalStart}ms"
+                            )
                             ServiceBus.lastAiResult.value =
                                 ServiceBus.AiResult.Failure("截图失败，请确认截图服务已启动")
                             return@collectLatest
                         }
-                        app.appendLog("capture() ok ${bmp.width}x${bmp.height}, calling Qwen…")
+                        debugLog(
+                            app,
+                            "TakeAndAsk capture ok size=${bmp.width}x${bmp.height} " +
+                                "capture=${SystemClock.uptimeMillis() - captureStart}ms"
+                        )
                         ServiceBus.lastBitmap.value = bmp
+                        val askStart = SystemClock.uptimeMillis()
                         val result = try {
                             app.screenshotAi.runWithBitmap(bmp, cmd.prompt)
                         } catch (t: Throwable) {
-                            app.appendLog("runWithBitmap threw: ${t.javaClass.simpleName}: ${t.message}")
+                            debugLog(app, "TakeAndAsk runWithBitmap threw: ${t.javaClass.simpleName}: ${t.message}")
                             Result.failure(t)
                         }
                         ServiceBus.lastAiResult.value = result.fold(
                             onSuccess = {
-                                app.appendLog("Qwen success, answer length=${it.length}")
+                                debugLog(
+                                    app,
+                                    "TakeAndAsk success ask=${SystemClock.uptimeMillis() - askStart}ms " +
+                                        "total=${SystemClock.uptimeMillis() - totalStart}ms answerLen=${it.length}"
+                                )
                                 ServiceBus.AiResult.Success(it)
                             },
                             onFailure = {
-                                app.appendLog("Qwen failure: ${it.javaClass.simpleName}: ${it.message}")
+                                debugLog(
+                                    app,
+                                    "TakeAndAsk failure ask=${SystemClock.uptimeMillis() - askStart}ms " +
+                                        "total=${SystemClock.uptimeMillis() - totalStart}ms " +
+                                        "err=${it.javaClass.simpleName}: ${it.message}"
+                                )
                                 ServiceBus.AiResult.Failure(
                                     it.message ?: it::class.java.simpleName,
                                 )
@@ -97,6 +119,10 @@ class CaptureForegroundService : LifecycleService() {
                 }
             }
         }
+    }
+
+    private fun debugLog(app: App, message: String) {
+        if (BuildConfig.DEBUG) app.appendLog(message)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

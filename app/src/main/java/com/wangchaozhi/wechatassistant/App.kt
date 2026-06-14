@@ -122,10 +122,20 @@ class App : Application() {
             .build()
     }
 
-    val qwenRepo: QwenRepository by lazy { QwenRepository(httpClient) { settingsRepo.qwenApiKey } }
+    val qwenRepo: QwenRepository by lazy {
+        QwenRepository(
+            httpClient,
+            apiKeyProvider = { settingsRepo.qwenApiKey },
+            debugLogger = { appendLog(it) },
+        )
+    }
 
     private val modelScopeRepo: ModelScopeRepository by lazy {
-        ModelScopeRepository(httpClient) { settingsRepo.modelScopeApiKey }
+        ModelScopeRepository(
+            httpClient,
+            apiKeyProvider = { settingsRepo.modelScopeApiKey },
+            debugLogger = { appendLog(it) },
+        )
     }
 
     val visionAi: VisionAiRepository by lazy {

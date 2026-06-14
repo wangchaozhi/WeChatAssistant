@@ -1,6 +1,8 @@
 package com.wangchaozhi.wechatassistant.feature.ai
 
 import android.graphics.Bitmap
+import android.os.SystemClock
+import com.wangchaozhi.wechatassistant.BuildConfig
 import com.wangchaozhi.wechatassistant.util.toBase64Jpeg
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,6 +28,7 @@ import java.io.IOException
 class ModelScopeRepository(
     private val client: OkHttpClient,
     private val apiKeyProvider: () -> String,
+    private val debugLogger: (String) -> Unit = {},
 ) {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -38,31 +41,65 @@ class ModelScopeRepository(
         quality: Int = 80,
         reasoningEffort: AiReasoningEffort = AiReasoningEffort.DEFAULT,
     ): Result<String> = withContext(Dispatchers.IO) {
+        val totalStart = SystemClock.uptimeMillis()
         val key = apiKeyProvider().trim()
         if (key.isEmpty()) return@withContext Result.failure(
             IllegalStateException("尚未配置魔搭 API Key，请到设置中填入。")
         )
+        val encodeStart = SystemClock.uptimeMillis()
         val base64 = bitmap.toBase64Jpeg(quality = quality, maxSide = maxSide)
+        val encodeMs = SystemClock.uptimeMillis() - encodeStart
+        val bodyStart = SystemClock.uptimeMillis()
         val body = buildRequestBody(model, prompt, base64, reasoningEffort)
+        val requestJson = body.toString()
+        val bodyMs = SystemClock.uptimeMillis() - bodyStart
         val req = Request.Builder()
             .url(ENDPOINT)
             .addHeader("Authorization", "Bearer $key")
             .addHeader("Content-Type", "application/json")
-            .post(body.toString().toRequestBody(JSON_MEDIA))
+            .post(requestJson.toRequestBody(JSON_MEDIA))
             .build()
+        debugLog(
+            "ModelScope ask start model=$model image=${bitmap.width}x${bitmap.height} " +
+                "maxSide=$maxSide quality=$quality promptLen=${prompt.length} " +
+                "encode=${encodeMs}ms body=${bodyMs}ms base64Chars=${base64.length} " +
+                "requestChars=${requestJson.length}"
+        )
         try {
+            val httpStart = SystemClock.uptimeMillis()
             client.newCall(req).execute().use { resp ->
                 val text = resp.body?.string().orEmpty()
+                val httpMs = SystemClock.uptimeMillis() - httpStart
                 if (!resp.isSuccessful) {
+                    debugLog(
+                        "ModelScope ask failure code=${resp.code} http=${httpMs}ms " +
+                            "total=${SystemClock.uptimeMillis() - totalStart}ms bodyChars=${text.length}"
+                    )
                     return@withContext Result.failure(
                         IOException("ModelScope HTTP ${resp.code}: ${text.take(300)}")
                     )
                 }
-                Result.success(parseAnswer(text))
+                val parseStart = SystemClock.uptimeMillis()
+                val answer = parseAnswer(text)
+                val parseMs = SystemClock.uptimeMillis() - parseStart
+                debugLog(
+                    "ModelScope ask success code=${resp.code} http=${httpMs}ms parse=${parseMs}ms " +
+                        "total=${SystemClock.uptimeMillis() - totalStart}ms bodyChars=${text.length} " +
+                        "answerLen=${answer.length}"
+                )
+                Result.success(answer)
             }
         } catch (t: Throwable) {
+            debugLog(
+                "ModelScope ask exception ${t.javaClass.simpleName}: ${t.message} " +
+                    "total=${SystemClock.uptimeMillis() - totalStart}ms"
+            )
             Result.failure(t)
         }
+    }
+
+    private fun debugLog(message: String) {
+        if (BuildConfig.DEBUG) debugLogger(message)
     }
 
     /** 拉取魔搭推理服务当前可用模型 id 列表。 */
